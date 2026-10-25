@@ -1,0 +1,20 @@
+/.cache/
+/out/
+/local.toml
+/__pycache__/
+**/__pycache__/
+*.pyc
+
+# Local inputs, device artifacts and build products are not source exports.
+*.ipsw
+*.img
+*.dmg
+*.efi
+*.dll
+*.fd
+*.mbn
+*.fw
+*.pyc
+/private/
+/artifacts/
+/Build/

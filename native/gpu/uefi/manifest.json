@@ -1,0 +1,668 @@
+{
+  "reference": "Ace 5 aaa100d19f6fb14e5897a7e496edf7838d4d4e9f native firmware GPU power policy and QMP transport",
+  "board_evidence": "r59 CX off; r60 nine clock IDs, CX domain, closed empty host AOP channel; houji FDT AOSS 0xc300000/0x400 and IPCC 0x406000/0x1000",
+  "GPU_firmware_executed": "r79-r95 stock GMU/HFI qualified; r95 SQE/AQE owned memory and four base bindings pass; CP/fence/Metal not executed",
+  "GMU_reset_release": "r79+ actual stock GMU firmware and HFI qualified; internal DMA diagnostic before stock each boot",
+  "SMMU_mutations": "owned GMU bank2 ASID750 SID5, normalGPU bank0 ASID751 SID0 and secure bank3 ASID753 SID2; real ownership, IRQ-masked polling; no CP commands",
+  "native_clock_calls_may_wait_unbounded": true,
+  "QMP_wait_bounds_us": 1000000,
+  "source_files": {
+    "Application/HoujiStorageProbe/GpuPower.c": "c6f966416902dd09f29a409fe7be77081bc6b9b15c3d89687d7883c020dcc76d",
+    "Application/HoujiStorageProbe/GpuPowerPolicy.h": "b4f0484c6e06803a72ccecb117de55eb0a0b7eb459f9f7619d6dc9b4247a71f6",
+    "Application/HoujiStorageProbe/GpuPowerReport.h": "772369beb38d140d776132b370e40d579f9495711702597591691434fea63c03",
+    "Application/HoujiStorageProbe/GpuQmpTransport.h": "f8e283bb4841c433c0332ccbc102df1c694745646866c6e4021dd8d8c3981875",
+    "Application/HoujiStorageProbe/GpuHandoff.h": "64e247bc75262b181de24fd1b6398686f4882fb2f7acad08b14507f958905b64",
+    "Application/HoujiStorageProbe/HoujiStorageProbe.inf": "c1a304b2b051849de2639a2bffe621798ee78ae48801d4d8bb6c382e8f297869",
+    "Library/MemoryMapLib/MemoryMapLib.c": "4f6f19b992fd647f425a4cf5db52da9f7ad2d178d1463143897f609dc53df89f",
+    "Application/HoujiStorageProbe/ProbeLog.h": "ba7d48c59727c9cf3140913bf6d50b75f14a2e4c9b5f8efaa2b577e9aab77896",
+    "Application/HoujiStorageProbe/GpuBusProbe.h": "e10575d8d40dbad94017022442186f3b36fa01a3b37bf77a13221e43db8eb1db",
+    "Application/HoujiStorageProbe/GpuGmuProbe.h": "40ff72da4813b0b7dc8fd1ef6622f67faf69464109fe120e1579b2468c0e82ff",
+    "Application/HoujiStorageProbe/GpuGmuCode.h": "3250956997b9d1356fe2713e3dc48e2bda61876e8fd207fbb3d4753848ebffc5",
+    "Application/HoujiStorageProbe/HoujiStorageProbe.c": "013d1e85d4f390f12c225e2bac5cd05a7392c1ce242f0817becbfe917c2526d9",
+    "Application/HoujiStorageProbe/LogFsTest.h": "5060d48fdd7b621d836e34bccfe52b48221897115c857e486b6d2b244012a6c4",
+    "Application/HoujiStorageProbe/GpuSmmuPrepare.h": "88dfe2f55e8a34a87530ca9adfb975c03c4e346fec15979876909c5f5a8e2cee",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/source-manifest.json": "49174cacc02767adbac9c9692eb261e062b2fa1909ff878e027ddddbc2af03f1",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/LICENSE": "7a730b868c1ff986cdfc210a7b140ab4e0a31bf7db1d15db901427973efaa70f",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/ArmSmmu4KProgram.h": "171900c3ed400b805c3a1587959f66bc4a19db18aedc8111e862651a90bb8d8f",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/ArmSmmu4KContext.c": "b8e32e32d1f07e71de65f31b12963ab8b01c05755f8c60c2d6f40cb03fe4eca8",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/ArmSmmu4K.h": "e25063b9134afc7eb79e7c030bc2858608cf0ade5da714d5dfd600fee5007e8e",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/ArmSmmu4KAudit.c": "594739cebc43926b1cb0a0e965867bcf1edfb90fab9c51465b65fa47be3755c1",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/ArmSmmu4KContext.h": "c842e78f37eab2e7cbba28cb89f4b993d9202503e75fee9e49a871101b936e53",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/ArmSmmu4KProgram.c": "3b1d4911b0a48f90b09c721ffd2eb95dbfc02e96165009b23f8c98841f36e2b0",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/ArmSmmu4KAudit.h": "1f313acd46db3dfecc115b8c885c5c43f7d23f73690a6157f900dfc77b2c9f6a",
+    "Application/HoujiStorageProbe/vendor/ArmSmmu4K/ArmSmmu4K.c": "0adb19b483e56e723014ed6cfe2c29f9d9735ae2770f62cf0057b22937dbd157",
+    "Application/HoujiStorageProbe/GpuSmmuContext.h": "05142b91bdb2d3ec5b012e043666c8acade76383072df793d31c25472aab86ec",
+    "Application/HoujiStorageProbe/GpuCachePublish.h": "2459ab4292b780a8971ddb5c49624aa360497245d7cf4b7c912fe08e5085f8df",
+    "Application/HoujiStorageProbe/GpuSmmuPlatform.h": "6903fcf1c4f660226d7e8d5fe651a3adf82e6d3f8859757ac167abf5b619d2fd",
+    "Application/HoujiStorageProbe/GpuDmaMemory.h": "b7890db3e1f22101ff48bac29fae3a0e0a30dabd5e71dd626379c29ffb49da4d",
+    "Application/HoujiStorageProbe/GpuDmaProbe.h": "0f020d3d0cc2990eb863ca38c1375d86014bbb5032aa012b09e9ae99de0d086e",
+    "Application/HoujiStorageProbe/GpuDmaCode.h": "ef5d3521ec4a19fc63101323a49520b49c7cc3ecdb461b052d371e7b90fc49c5",
+    "Application/HoujiStorageProbe/GpuSmmuProfile.h": "8d1ad4f81dbae60e5a48ce5e9d27a94230198083ea5beed66399a36b1fc974ed",
+    "Application/HoujiStorageProbe/GpuFirmwareMemory.h": "02e0d1663a1b4883fd31a30a29b1dd734ea1df110df7edbb008b2d4cb996d142",
+    "Application/HoujiStorageProbe/GpuFirmwarePrepare.h": "ffa4b8717658c35f259608a470784c795bf9d824af5ed859b881139c55016421",
+    "Application/HoujiStorageProbe/vendor/AdrenoFirmware/source-manifest.json": "cb6f888630f0170487a6a86819aff2595bed272e230f19621e3df3373b32ef32",
+    "Application/HoujiStorageProbe/vendor/AdrenoFirmware/AdrenoFirmware.h": "6b2e308f2feae92642f21da2667c3665a2e234ef79e7c5400e7aac7dd3c5b7ed",
+    "Application/HoujiStorageProbe/vendor/AdrenoFirmware/LICENSE": "03a8ab50f4b3b4c65f070d07302a3522e7badbf54dde090cca59bb3e746bba3f",
+    "Application/HoujiStorageProbe/vendor/AdrenoFirmware/AdrenoFirmware.c": "c3cc714a65ce90216a0fc5c6f0e102ae1769c45e559c08f94a0b5f6fa3e97070",
+    "Application/HoujiStorageProbe/vendor/Ace5Gmu/source-manifest.json": "badf5eedea6eb3127c74f166efac50e33db8e1b3dfce8e600b2965df2ddc5146",
+    "Application/HoujiStorageProbe/vendor/Ace5Gmu/giulia_gpu_firmware.h": "eae640bc4b2656ce1b843860fd47e19c5d94da4e2c2061431d0a36678f5c8c2b",
+    "Application/HoujiStorageProbe/vendor/Ace5Gmu/giulia_gpu_memory.h": "a881909805efcfb3322697d61e45c0f4c9be09b483cd87b9019ce6ec88b3e94a",
+    "Application/HoujiStorageProbe/vendor/Ace5Gmu/giulia_gpu_scm.h": "b720ed219a955299f63293b78f12df16976b066a8e4b287025e515d151e9b7b6",
+    "Application/HoujiStorageProbe/vendor/Ace5Gmu/giulia_gpu_hfi.h": "26683bb33cb70fc05a877f2cff41956e46e5dddc87ad94a88e091c4b34f323ce",
+    "Application/HoujiStorageProbe/GpuRecoveryRequest.h": "d378d9b9c5c041fbbcc8396a13e86a24851d4957581eb1b07536454d10457751",
+    "Application/HoujiStorageProbe/GpuStockGmu.h": "c96fae9333b6220ccb7a14386fcb05cce3b6511158d393376d4c11d4140077ad",
+    "Application/HoujiStorageProbe/GpuHfiBootstrap.h": "a323cf138968713af2c9ca58f8bbc20813fa1e7c2a5966f70ebf457bba6549b4",
+    "Application/HoujiStorageProbe/GpuHfiTables.h": "0637292210067890bae1faa5559e29372c69fa64057acbaebae0539f84b23244",
+    "Application/HoujiStorageProbe/GpuScratchContext.h": "07da0b70823f2c9c8088af5bc0f03ab5d9f7750eaf0e1b267d5851bcefcef908",
+    "Application/HoujiStorageProbe/GpuScratchNative.h": "8ddfc4b963e06d3f0875c6bfa9c74469ff150829ddbebff1d4939fee15f86864",
+    "Application/HoujiStorageProbe/GpuSharedMemory.h": "4e8d41a3a42c9c2ddf3e51fc160a5b80724708b8783edd6a26ace1e0e8c550b8",
+    "Application/HoujiStorageProbe/GpuSecureMemory.h": "d266349c0b5950c6341f33226457a9c31e62652d7cf06cc47b5c05d49f549dc4",
+    "Application/HoujiStorageProbe/GpuSecureMemoryNative.h": "15110cf124bd7bdddde207f915d39377732d6194690e5f5abcb9dedad597c4e5",
+    "Application/HoujiStorageProbe/GpuSecureContext.h": "44b43b29ea1cc0a7e239c09c9c2cbd7341f1d5549a86fabc6af6c69a457187b5",
+    "Application/HoujiStorageProbe/GpuSecureContextNative.h": "dae06ee063c6afdeb99afd0cde11e490b2a74bd259718141849439c18b2c5c3c",
+    "Application/HoujiStorageProbe/GpuGxStart.h": "1699bb552bf65ca412212dd044d506f69e1fe1f47afd9c2e6bf496514d51731e",
+    "Application/HoujiStorageProbe/GpuGxStartNative.h": "d948a1e33965faa5866c20eecc0a1ca9ce6e4c6645ce0c9215e323fa33daf66e",
+    "Application/HoujiStorageProbe/GpuCodeMemory.h": "ce470ada8d666e1343f04565a5737c5d4ecc3b597fb185152f690f5c9d4a277c",
+    "Application/HoujiStorageProbe/GpuCodePrepare.h": "ccfdf284a2944c68af882a49930b5c29a0f1b44a9f63788154afd2e77a5cfb62",
+    "Application/HoujiStorageProbe/GpuCodeBind.h": "36da5ad3183b343f0e7013ee47722290931ab11ad03ba8bf09a8451b90273dd7",
+    "Application/HoujiStorageProbe/GpuCodeBindNative.h": "4bb5f3df8754be66caaa50c7bf866ffc48e0b1c1aa93384cfd6665c3cbc97aa0",
+    "Application/HoujiStorageProbe/GpuGen7Table.h": "263fe7653a35628a385d7e745cd66fd39a83d2c7bafbb9c7b02ef67535393f4a",
+    "Application/HoujiStorageProbe/GpuGen7Config.h": "fab5479c19dd218889f0699b259d2022d70d136d25460fb865097feb9410ae4b",
+    "Application/HoujiStorageProbe/GpuGen7Native.h": "532f826655a79dae53b278b92c55dc380714cc53a1cd8c1f6c1dd9777f1282e4",
+    "Application/HoujiStorageProbe/gen7-register-facts.json": "491301ac6ad82be0b328e0b04ae846e7c1dd4deb014f21f580d3369228e10d1f",
+    "Application/HoujiStorageProbe/GpuCpInit.h": "4dad8ba7a2dd9f8c94a7107ba720526d7e63123d2c87ec792eba6fd60bc2667d",
+    "Application/HoujiStorageProbe/GpuCpInitNative.h": "567e1454c6baf7de6b279f88da13e53daee56795c927cbc9b814973a11b7ac67",
+    "Application/HoujiStorageProbe/GpuLiveLog.h": "46cf35e6167d46cfaee275d8f0c5cf3b85496f7f661d616de15388ce5713d1c7",
+    "Application/HoujiStorageProbe/GpuLiveLogNative.h": "8fd90c6f2506892499e2a0443b5a0841a0d93a906cc312ae8eb282f031a4b393",
+    "Application/HoujiStorageProbe/GpuCpPoll.h": "5b91715cb0d5143009aaa8e6bc1aaa0d8a1988e27491e2702389cc3df34b355e",
+    "Application/HoujiStorageProbe/GpuCpBoundaryNative.h": "b653a1661d65e21fc7f75bbf85822755704213f17574e6dd8cd161dfdbaa587d",
+    "Application/HoujiStorageProbe/GpuCpPolledIrqNative.h": "13c293e24d3bb201b1d70704fa4efd335ab31b08413097381d1fc656f36757cc",
+    "Application/HoujiStorageProbe/GpuReadFaultNative.h": "3edad9e5a000158dfa65f3bc5f836aa3ab23a6a5a00664a0d2f7cd5af37b8f4d",
+    "Application/HoujiStorageProbe/GpuReadFaultPolicy.h": "1caf0c4aa93398cfb407b61e0a5918b8134f4256cf460749374ff27ff192c63f"
+  },
+  "IPCC_mapping": "reuse original IPC_ROUTER_TOP; no overlapping alias",
+  "QMP_mapping": "reuse original AOSS; no overlapping alias",
+  "shared_log_capture": "GpuPower.c calls external ProbePrint in the application translation unit",
+  "request_initialization": "pristine gpp_report_init; CRC sealed only by the returned result producer",
+  "inherited_clock_diagnostics": "Only after owned CX and AOP confirmed, configured-rate queries and guarded CM3/RCG reads; no reprogramming",
+  "held_reset_bus_probe": {
+    "source": "MiCode shennong-u-oss gcc/gpucc-pineapple and Ace5 aaa100d1 GPU_TERMINAL_BRINGUP",
+    "authorization": "CRC-valid locally produced partial native power report, exact attempted=confirmed=0x1002, ACD consumed, no uncertain transport/provider",
+    "writable_fields": [
+      "GCC CFG 0x171004 bit 1",
+      "GCC MEMNOC 0x171010 bit 1",
+      "GPUCC HLOS SMMU clock vote 0x3d97000 bit 0"
+    ],
+    "cleanup": "restore only attempted fields in reverse order, masked readback; retain/report cleanup failure until reset",
+    "maximum_policy_poll_us": 1000,
+    "SMMU_access": "r65 ID0/1/2 CR0 GFSR verified; r66 adds exactly 24 SMR/S2CR pairs and 22 bank SCTLR reads, plus CM3 FWINIT and raw GX power",
+    "reset_writes": false,
+    "firmware_execution": false,
+    "hardware_tested": "r65 gated IDs and restore; r66 all 24 SMR/S2CR and 22 SCTLR observations, no active streams/M bits, FWINIT 0, GXPOWER 3",
+    "host_policy_cases": 460
+  },
+  "CM3_diagnostic_execution": true,
+  "GPU_stock_firmware_execution": "r78 explicit candidate stock boot, r77 has not executed stock",
+  "CM3_diagnostic": {
+    "code_bytes": 136,
+    "code_sha256": "6c1d70a8de298accbb03a8dd39cc5aaa289b741cb7a7ab3d176261d2cdb795e0",
+    "host_policy_cases": 536,
+    "actual_instructions_emulated": true,
+    "external_memory_access": false,
+    "SMMU_control_writes": false,
+    "ITCM_mailbox_stack_backup_restore": true,
+    "reset_failure": "retain TCM and bus gates until reset; do not restore under running CM3",
+    "hardware_tested": "r71 mailbox a7500002/750c0de0/128, GFSR=0; reset held again, TCM 58/58 and controls 7/7 restored, bus fields restored=7; no GPU jobs",
+    "requires_CXO_HUB_branches_on": true,
+    "startup_control_registers": 9,
+    "startup_control_backup": true,
+    "startup_control_restore": "first 7 registers after reset confirmed; two peripheral IRQ masks remain disabled until platform reset",
+    "idle_instruction": "ITCM busy loop; no WFI",
+    "bounded_scope": "mailbox and reset polling only; native provider and checkpoint I/O not preemptible",
+    "AO_mask_readback": "low 0x7f, per pinned same-chip gpu-native-hwsched.py; write UINT_MAX like vendor",
+    "control_verify_diagnostics": "retain first mismatch address/value/expected/mask before cleanup"
+  },
+  "early_checkpoint_logging": {
+    "file": "existing UniXNU.log on this boot validated logfs only",
+    "checks": "snapshot footer CRC, File Flush and Close, parent Flush, exact independent readback; write gate closed after each callback",
+    "before_native_power": true,
+    "before_TCM_mapping": true,
+    "before_TCM_backup": true,
+    "after_TCM_backup_before_load": true,
+    "after_TCM_load_before_release": true,
+    "after_GPU_and_touch": true,
+    "TPL": "filesystem at application TPL; restore notify TPL; held-reset stages revalidate all prerequisites; running stages only exact internal-only diagnostic with IRQ masks disabled",
+    "captures_arbitrary_panic": false,
+    "after_control_backup_before_configuration": true,
+    "after_reset_write_before_mailbox": true,
+    "after_success_mailbox_before_reset_assert": true,
+    "after_disabled_context_retirement": true
+  },
+  "cold_HUB_preparation": {
+    "native_clock_provider_sha256": "f498e08bf978b36af750a3958c83b788d39f786069d31d6483d4df66d4ce69ba",
+    "requested_hz": 200000000,
+    "requires": "owned cold CX, all streams FAULT, all bank M bits clear, FWINIT=0 GXPOWER=3 CM3 reset=1, HUB branch/CMD/CFG=0 and native frequency EFI_NOT_STARTED",
+    "native_calls": "SetClockFreqHz EXACT, GetClockFreqHz, EnableClock, IsClockEnabled, IsClockOn; native provider may wait unbounded",
+    "readback": "configured=200MHz, On true, branch not halted, RCG update/root-off clear and CFG source/divider=0x505; no CM3 release before all proof",
+    "other_source_changes": false,
+    "ownership_lifetime": "retain native HUB reference/frequency until reset",
+    "measured_frequency": false,
+    "hardware_tested": "r69 Set/Get 200 MHz, Enable success, IsOn=true, CBCR=0, RCG_CMD=0 CFG=0x505; configured frequency, not measured",
+    "native_API_TPL": "application TPL with CM3 held reset; restore notify TPL on every path"
+  },
+  "inactive_native4K_tables": {
+    "component": "UniXNU/ArmSmmu4K",
+    "commit": "8bb168ad058c28d5c04f179ba407875eacba7ef3",
+    "vendor_source_manifest_sha256": "49174cacc02767adbac9c9692eb261e062b2fa1909ff878e027ddddbc2af03f1",
+    "table_pages": 3,
+    "data_pages": 1,
+    "input_bits": 32,
+    "output_bits": 36,
+    "test_IOVA": "0x60000000",
+    "test_bytes": 4096,
+    "leaf_permissions": "RW, non-executable, WB, inner shareable",
+    "allocations": "UEFI BootServicesData below 36 bits; physical identity/cache/shareability and read/write translation verified per page; release before return",
+    "SMMU_control_writes": false,
+    "stream_activation": false,
+    "device_visibility_qualified": false,
+    "descriptor_read_count": 1536,
+    "host_policy_cases": 61,
+    "hardware_tested": "r72 currentEL1, CPU AT read/write physical identity, attributes WB/inner-shareable, 1536 descriptor reads, allocations all released",
+    "ownership_lifetime": "retain through context test; release only after known disabled retirement, zero TTBR readback and bank TLB sync; uncertainty stops before XNU"
+  },
+  "disabled_SMMU_context": {
+    "bank": 2,
+    "ASID": "0x750",
+    "register_backup_count": 9,
+    "M_ever_set": false,
+    "stream_writes": false,
+    "global_writes": false,
+    "fault_clear_writes": false,
+    "TTBR_access_bits": 64,
+    "TLB_sync_scope": "selected bank2 only; TLBIALL/TLBSYNC; host regression checks bank0 and bank2",
+    "original_register_restore": false,
+    "uncertain_cleanup": "retain tables and gates until reset; explicit STOP before XNU",
+    "host_policy_cases": 563,
+    "hardware_tested": "r74 known disabled retirement mask=1ff; TTBR0=TTBR1=0, bank TLB synchronized, owned tables/data released, temporary bus fields restored=7; no M=1 or DMA",
+    "initial_registers": "capture for evidence only; never replay uninitialized fields",
+    "cleanup": "SCTLR=0; canonical disabled CBA2R/CBAR/TCR/MAIR; TTBR0=TTBR1=0; bank TLBIALL/TLBSYNC and independent reread",
+    "dispatcher_error_cases": 11,
+    "all_context_errors_retain_resources": true,
+    "optional_visitor": "r76 owned GMU DMA visitor; outer context core itself keeps M=0. Visitor returns identical disabled context or causes resource retention; no speculative cleanup on visitor error.",
+    "host_policy_cases_per_bank": 563
+  },
+  "cache_publication": {
+    "method": "CTR_EL0 DminLine, DC CVAC per owned line, DSB SY; no DC ZVA",
+    "memory_bytes": 16384,
+    "geometry_bytes": [
+      16,
+      4096
+    ],
+    "owned_pages": 4,
+    "descriptor_audits": 2,
+    "descriptor_reads": 3072,
+    "host_policy_cases": 1313,
+    "device_visibility_qualified": false,
+    "hardware_tested": "r75: actual line64, 256 lines, one DSB and two 1536-descriptor audits; no device visibility claim"
+  },
+  "SMMU_platform_observation": {
+    "addresses": [
+      "0x3dc2004",
+      "0x3da6008",
+      "0x3da600c"
+    ],
+    "meaning": [
+      "bank2 ACTLR",
+      "global PRR low",
+      "global PRR high"
+    ],
+    "writes": false,
+    "consistency": "two read sets between three complete cold-owner surveys",
+    "host_policy_cases": 237,
+    "hardware_tested": "r75: ACTLR0=3, PRR low/high=0, 228 reads stable, three cold ownership surveys"
+  },
+  "GMU_owned_DMA": {
+    "enabled": true,
+    "code_bytes": 176,
+    "code_sha256": "b3a876b2a2a6aed251b824ba412fdf9e1d1f4c340a8093868e63c3bba721e076",
+    "instructions_emulated": true,
+    "bank": 2,
+    "ASID": "0x750",
+    "stream_slot": 0,
+    "SID": 5,
+    "mapped_IOVA": "0x60000000",
+    "mapped_bytes": 4096,
+    "negative_IOVA": "0x60002000",
+    "data_write_offset": 8,
+    "data_marker": "0xa750cafe",
+    "PRR": "separate allocated zero page, CPU mapping checked, published before ACTLR.PRR; exact known initial ACTLR3/PRR0 required",
+    "SCTLR_write": "0x1027",
+    "CFIE": false,
+    "CFCFG_stall": false,
+    "other_streams": "invalid/FAULT",
+    "fault_clear": "only selected bank TF bit1 after exact owned read translation fault and inactive context; no global clear",
+    "CPU_visibility": "DC IVAC only after confirmed reset, stream detach, bank disable and TLB sync; full-page marker/integrity check, restore word and clean to PoC",
+    "FS_calls_during_external_program": false,
+    "poll_budget": 1000,
+    "poll_interval_us": 10,
+    "failure": "retain all memory, stream/context/clocks until reset; only retry CM3 reset if not already confirmed; stop before XNU",
+    "success_release": "CM3 reset, stream invalid/FAULT, bank disabled+TLB synchronized, ACTLR3 PRR0, exact TCM/control restore, verified CPU marker+restore, outer zero TTBR readback; then release all five pages",
+    "host_policy_cases": 1368,
+    "host_cpu_cache_cases": 1170,
+    "native_adapter_cases": 786684,
+    "hardware_tested": "r76 bank0 qualified: positive1 negative1, actual FSR402 FAR60002000 FSYNR170023, CPU marker a750cafe verified/restored, TCM68/68 controls7f, detached/reset, ACTLR3 PRR0 and zero TTBRs; bank2 candidate pending",
+    "GPU_jobs": false,
+    "stock_firmware": false
+  },
+  "batched_r77": {
+    "stages": [
+      "inactive actual firmware and HFI memory + 6-table audit",
+      "native CX/HUB + internal TCM baseline",
+      "production bank2 positive/negative DMA + cache visibility",
+      "secure-CX convention/availability/init",
+      "fault/IRQ/mailbox/TTBR snapshots and XNU checkpoint handoff"
+    ],
+    "timing": "CNTPCT/CNTFRQ ticks, per-checkpoint persistence cost, per-SMC duration, firmware batch duration",
+    "known_baseline_persistence": "RAM-only except before qualified internal release; new stage boundaries durable; full accumulated RAM text in next snapshot",
+    "stop": "uncertain DMA/secure initialization/attribute restore retains resources and stops before XNU",
+    "stock_GMU_executed": false,
+    "GPU_commands": false,
+    "hardware_tested": "r77 all stages passed; NormalNC, bank2 DMA, secure-CX and direct recovery; valid native CRC; protected partitions/GPT/misc reserved unchanged",
+    "recovery_watcher": "poll existing servers, immediate CRC/run-bound capture, preserve partials; no fixed boot grace sleep",
+    "execution": "UEFI only; skip high-memory loader and XNU/userland; direct recovery on committed result and exact no-wipe BCB readback",
+    "host_recovery_request": "full 4MiB misc backup, first864 write only, exact full readback, reserved/A-B bytes unchanged",
+    "UEFI_misc_writes": false,
+    "host_watcher_poll_seconds": 0.5
+  },
+  "inactive_firmware_memory": {
+    "firmware_bytes": 78588,
+    "firmware_sha256": "9685f62c42543befcaee68d25355e16bf55cdb0d573bddcc9f6633f59eec3f72",
+    "boot_integrity": "RAMdisk SHA at staging, exact length and CRC5d67ec17 at boot; not a signature/authentication claim",
+    "regions": 8,
+    "allocated_table_pages": 10,
+    "expected_used_tables": 6,
+    "native4K": true,
+    "HFI_queues": 17,
+    "HFI_bytes": 73728,
+    "Normal_NC": "UEFI WC -> NormalNC in pinned ArmMmuLib, actual AT read/write PAR44; never Device UC",
+    "CPU_cache_publication": "clean each owned WB line and DSB; NC shared memory DSB; original attributes restored before free",
+    "activation": false,
+    "host_cases": 78626
+  },
+  "secure_CX": {
+    "component": "unmodified Ace5Gmu giulia_gpu_scm.h aaa100d1",
+    "fixed_request": "GPU INIT_REGS ALWAYS|BCL|TSENSE=0x0b; no CLX",
+    "convention_availability": "real SMC64 and INFO queries, no assumed success",
+    "raw_results": "x0..x7 retained, begin/end durable, busy and interrupt resumption bounded by component; individual SMC cannot be preempted",
+    "prerequisites": "same-boot DMA complete, inactive retired bank2, CM3 reset, every stream FAULT/every bank M0, owned CX/clocks",
+    "waitqueue_or_init_failure": "retain and stop; no fabricated IRQ resume",
+    "PAS_ZAP_or_secure_buffers": false,
+    "hardware_tested": "PASS actual real SMC64 availability and INIT_REGS0xB r79+; not a secure buffer or PAS proof"
+  },
+  "stock_GMU_r78": {
+    "hardware_tested": "r78 actual stock release: phase7 FW ready wait failed; FSR408/FAR4000/FSYNR1f0063 privileged instruction permission fault; reset confirmed; direct recovery and valid native CRC; protected state unchanged",
+    "prerequisites": "r77-qualified real firmware/BSS and 17queue NormalNC shared memory, same-boot bank2 DMA, secure-CX, exact owned root+ASID750/SID5, masked peripheral/context IRQ",
+    "firmware_digest": "9685f62c42543befcaee68d25355e16bf55cdb0d573bddcc9f6633f59eec3f72",
+    "PDC_RSCC": "own FDT PDC b280000/10000 + RSCC3d50000/10000; fixed gen7_2-family RSC layout and exact vendor values; hidden TCS values not subject to equality readback; never replay arbitrary prior register contents",
+    "register_sources": "OnePlus graphics-kernel 453d8875 adreno_gen7_gmu.c/gen7_reg.h plus Ace5 aaa100d1 same-chip native test",
+    "polls": "FW ready100/1ff and HFIready1/1, max10000x10us each; one id12 property125 request, matched header+ACK+value1+status0 required",
+    "TCM_backup": "entire32KiB CPU shadow, CRC32 recorded; stock payload540bytes checked before release",
+    "lifetime": "retain all firmware, PRR, diagnostic tables and gate references until platform reset on success or failure; never infer drained DMA from reset readback",
+    "post_reset": "verify held reset before filesystem; if power proof disappears no further gated reads/writes; if reset cannot be confirmed stop with prior durable log",
+    "no_FS_while_stock_runs": true,
+    "no_GPU_CP_PM4_HWSCHED_START": true,
+    "no_PAS_ZAP_secure_buffers": true,
+    "host_cases": 869,
+    "native_adapter_cases": 65929
+  },
+  "stock_GMU_r79": {
+    "hardware_tested": "PASS: actual FW100/HFI1/property125 matched request echo, value1 status0; raw AP0/PXN0/UXN0; no valid SMMU fault; CM3 reset confirmed, valid log CRC, protected state unchanged",
+    "delta": "All eight firmware/HFI ranges include ArmSmmu4KPrivileged; executable only first four ICACHE ranges; WB/shareability unchanged from r78",
+    "reference": "Ace5 aaa100d19f6fb14e5897a7e496edf7838d4d4e9f ios16/GiuliaGPU.cpp",
+    "diagnostics": "Actual CPU-owned three-level descriptor walk for each range: raw descriptors, AP, PXN, UXN",
+    "hypothesis": "r78 privileged instruction PF reflects missing privileged-execute permission; pending hardware verification",
+    "scope": "same combined batch and recovery watcher; no CP/PM4/PAS/GX or XNU execution"
+  },
+  "HWSCHED_r80": {
+    "hardware_tested": "Stock GMU/property passed; PERF table three-word matching value0 ACK received; strict four-word checker stopped. Valid native CRC, CM3 reset and protected state verified.",
+    "messages": [
+      "GPU PERF table15 (one nonzero GPU point231MHz)",
+      "own-device bandwidth table3",
+      "HWSCHED feature1",
+      "KPROF feature16",
+      "CORE_FW_START14",
+      "CONTEXT_QUEUE121 query12",
+      "PREEMPTION explicitly disabled",
+      "AQE feature29",
+      "START10; record first resource request without ACK"
+    ],
+    "AOP_sha256": "c572b184827e4a6fac8f87318da81b36e0e8056d87025ac8ae40e764d4129f8c",
+    "table_manifest_sha256": "190abcbaebc0b43fcde5bac10583cad6f944165c83458267f8faec5ad49c0fa1",
+    "live_cmd_db_verified": false,
+    "host_cases": 102,
+    "stock_lifecycle_cases": 871,
+    "native_writer_cases": 65929,
+    "diagnostics": "Per-message matching full ACK/status and raw first resource request; 17 queue indices and first256 firmware-log words",
+    "resources": "No allocation ACK, GPU stream, CP/PM4, OOB, PAS/ZAP or secure ownership operation; stop and retain until platform reset",
+    "polls": "max10000x10us per message; max32 debug packets globally; all health/I/O failures stop"
+  },
+  "HWSCHED_r81": {
+    "hardware_tested": "Eight stages accepted with command-specific ACK contracts, context queue1; START requested v1 SCRATCH kind2 flags33f 4KiB align0 handle2. No allocation ACK; valid native CRC, reset and protected state verified.",
+    "delta": "Vendor command-specific ACK: TABLE/BW/CORE/START accept three words and require value0; v5 FEATURE_CTRL/GET_VALUE require at least four and status0; actual status-present flag persisted",
+    "host_cases": 103,
+    "stages": "Same nine-message r80 batch; stop at resource request; no allocation ACK/GPU stream/CP/PM4/OOB/PAS",
+    "reference": "OnePlus 453d8875 adreno_gen7_hfi.c gen7_hfi_send_generic_req, gen7_hfi_send_generic_req_v5, gen7_hwsched_hfi.c send_start_msg"
+  },
+  "shared_scratch_r82": {
+    "hardware_tested": "PASS: real same-page GPU/GMU mapping, bank0 enabled+SID0 attached, exact scratch ACK consumed; next PROFILE kind14/handle14 flags33f/4096 captured. Both FSR400 no valid fault. Native CRC/protected state verified.",
+    "request": "Only captured v1 kind2 flags33f bytes4096 align0 gmu_handle2; zero input addresses; first request only",
+    "CPU_GMU_GPU": "One actually allocated NormalNC page at IOVA61000000 in both independent native4K graphs; GPU data NX privileged RW; no fake physical or mapping response",
+    "firmware_memory": "9 ranges, 7 table pages/140 leaves, 10 allocated resources retained; all CPU AT and actual table audits repeated",
+    "GPU_context": "Own three-page/one-leaf graph; bank0/ASID751/slot1/SID0; preserve live GMU bank2/ASID750/slot0/SID5; own global PRR page already validated, no new global writes",
+    "mapping_and_ACK": "Prepare all memory before stock release; activate/readback GPU bank0 only for exact captured resource; full CPU-owned graphs re-audited and live root checked before ACK",
+    "unknown_requests": "Capture second request and stop; no second ACK, secure/MMIO/memstore/fence alias or speculative allocation",
+    "retention": "All pages, contexts, streams and clocks retained until platform reset, on all failures; no unmap/free/replay of unknown old registers",
+    "diagnostics": "Actual graph roots, exact resource request/response, GPU bank0 FSR/FAR/FSYNR with valid mask, per-operation observed validity",
+    "host_cases": {
+      "context": 643,
+      "actual_writer": 65568,
+      "firmware_memory": 78630,
+      "stock_lifecycle": 871,
+      "HFI_bootstrap": 107
+    },
+    "CP_PM4_GX_MMIO_PAS": false
+  },
+  "shared_arena_r83": {
+    "hardware_tested": "Two allocations/ACKs consumed, 8192 bytes: SCRATCH and PROFILE. Next USER_PROFILE_IBS kind15/handle15 flags339 4KiB captured; requires GPU unprivileged read-only. FSR400 on both sides; native CRC and protected state verified.",
+    "capacity": "1MiB preallocated NormalNC; 256 leaves in separate 3-page GPU graph, 395 leaves/7 pages GMU graph; prepared/published before CM3 release",
+    "supported": "flags33f ordinary privileged RW shared data only; bounded page-disjoint monotonic allocation, logical sizes and packed VA/size alignment preserved; opaque (kind,GMUhandle) identity retained and duplicates refused",
+    "rejected": "secure/MMIO/IPC/dedicated memstore/fence, unknown flags, sizes beyond pool, excessive alignment, duplicate identities; stop without fake ACK",
+    "batch": "up to32 resource requests/ACKs with unique host sequence; preserve every request/response and capture first unsupported request",
+    "no_live_leaf_edits": true,
+    "no_new_CP_GX_IRQ_SCM_operations": true,
+    "retained_until_platform_reset": true,
+    "host_cases": {
+      "wire_allocator": 811,
+      "HFI_multi_resource_and_bound": 109,
+      "context": 643,
+      "actual_writer": 65568,
+      "firmware_memory": 78630,
+      "stock_lifecycle": 871
+    }
+  },
+  "shared_permissions_r84": {
+    "hardware_tested": "PASS: three resource ACKs consumed including USER_PROFILE_IBS339 in AP3 read-only/unprivileged class; next GMU-only CMD_BUFFER178/32KiB captured; no active GPU/GMU fault, CRC/protected state verified.",
+    "mapping": "Four prebuilt 256KiB GFX classes in the 1MiB NormalNC pool: unprivilegedRO, privilegedRO, unprivilegedRW, privilegedRW; all data NX. GMU remains privilegedRW for this supported family. No live leaf edits.",
+    "wire": "Exact flags339/33b/33d/33f only; allocation cursor selected by requested GFX permissions, preserve exact logical size and packed VA/size alignment; stop on special/unknown resources or per-class exhaustion",
+    "proof": "Native actual descriptor audit uses four separate ranges; host walks raw descriptors and checks AP3/2/1/0 and PXN/UXN1; backing remains disjoint and owned until reset",
+    "host_cases": {
+      "planner": 815,
+      "context_and_four_AP_classes": 647,
+      "actual_writer": 65568
+    },
+    "GPU_CP_PAS_fence_Metal": false
+  },
+  "GMU_only_r85": {
+    "hardware_tested": "PASS: GMU-only CMD_BUFFER178/32KiB consumed as fourth resource; GPU address0 and GMU61100000; next RB flags37b kind1 handle26 32KiB. No active GPU/GMU fault. Automatic watcher spawned43.602ms after fastboot result, valid capture and protected state verified.",
+    "memory": "Independent preallocated 1MiB NormalNC arena IOVA61100000, no GPU table alias; real CPU/GDS/AT plus complete GMU graph audit before ACK",
+    "wire": "Exact GMU-only bufferable privileged RW family flags78/178/278/378, preserve host bits and logical size; GPU address0, GMU address61100000+owned slice; ordinary kinds only, no secure/MMIO/memstore/fence",
+    "device_permissions": "Read|Write|Privileged|Execute for this GMU-only arena follows pinned OnePlus453d8875 get_attrs (no IOMMU_NOEXEC) and Ace5 ggm_attributes; no CPU executable attribute requested; shared arena and GFX data unchanged",
+    "graph": "10 GMU ranges, 11 actual resources, 7 table pages/651 leaves; GPU3pages/256 leaves remains four exact GFX classes, no map61100000",
+    "host_checks": {
+      "planner_and_wire_encoding": 853,
+      "firmware_memory": 78634,
+      "stock_lifecycle": 871
+    },
+    "retained_until_platform_reset": true,
+    "CP_PM4_PAS": false
+  },
+  "bufferable_r86": {
+    "hardware_tested": "PASS: RB37b accepted as fifth resource; next SMMU record kind3 handle3 flags17f logical24 bytes. GPU/GMU FSR400, valid CRC and protected state verified.",
+    "delta": "Allow GMU_BUFFERABLE bit6 on existing exact GFX permission classes; preserve raw flags and same NormalNC VMA, no cache or PTE/permission change; CACHE bit7 stays rejected",
+    "source": "OnePlus453d8875 adreno_hfi.h BUFFERABLE definition, get_attrs PRIV/WRITE only, gmu_import_buffer CACHE-bit VMA choice; Ace5 same-chip noncached allocator",
+    "host_cases": 857,
+    "new_MMIO_SCM_operations": false
+  },
+  "host_flags_r87": {
+    "hardware_tested": "PASS: SMMU kind3 flags17f logical24 consumed as sixth allocation; real4096 backing and size24 wire; next shared context kind4 flags37f 0x37d000 captured; both FSR400, valid CRC and protected state verified",
+    "delta": "HOST_ACC/HOST_INIT do not alter device mappings; preserve both bits and logical size, initialize only owned private backing as vendor allocator does. Same strict shared GMUprivRW/GFX4 classes, optional BUFFERABLE, no cacheable/secure flags.",
+    "next_captured_request": "kind3 handle3 flags17f size24 align0; response size stays24, private physical backing page4096",
+    "host_cases": 873,
+    "new_MMIO_PTE_SCM_operations": false
+  },
+  "large_context_r88": {
+    "hardware_tested": "PASS: seventh ordinary resource ACK consumed; GPU5tables1280leaves/GMU9tables1675leaves verified; next kind5 flags1007 secure0x37d000; no active fault, valid CRC, protected state unchanged",
+    "request": "r87 actual v1 kind4/handle4 flags37f size0x37d000 align0",
+    "memory": "Separate preallocated4MiB NormalNC arena61200000, privileged RW NX in both GPU and GMU graphs; existing four classes/GMU-only arena unchanged; no active leaf edits",
+    "graphs": "GPU5pages1280leaves/5ranges; GMU9pages1675leaves/11ranges,12retained resources; actual CPU AT and full physical graphs checked before ACK",
+    "unsupported": "Secure kind5/flags1007 and dedicated MMIO/IPC/memstore/fence have no ordinary mapping/ACK",
+    "host_cases": {
+      "planner": 1935,
+      "context_full_1024_large_leaf_walks": 1674,
+      "firmware_memory": 78638,
+      "stock_lifecycle": 871,
+      "native_writer": 65568
+    },
+    "CP_PM4_PAS_fence_Metal": false
+  },
+  "secure_memory_r89": {
+    "hardware_tested": "Six INFO queries all available3F; real independent4MiB allocated; CPU RP+XP success,1024page read/write AT faults PAR817. Direct checkpoint refused at notify TPL; phase3 stopped before assignment, no owned memory/secure bank/ACK; valid CRC and protected state verified.",
+    "sources": [
+      "OnePlus kernel d763ed47deec55451366c1187f813f2f309d88a7 qcom_scm.c __qcom_scm_assign_mem and qcom_scm.h constants",
+      "OnePlus graphics453d8875 kgsl_sharedmem.c HLOS3 to CP_PIXEL10 RW6; Ace5 aaa100d1 platform implementation"
+    ],
+    "SCM_calls": "six fixed read-only INFO queries for MP_ASSIGN, CP_SMMU_APERTURE, PAS_INIT/MEMSETUP/AUTH/SHUTDOWN; then one fixed MP_ASSIGN42000c16/arginfo1117, no actual PAS",
+    "memory": "Independent4MiB below4GiB,64KiB aligned; no ordinary GPU/GMU mapping; host does not zero/copy/read data contents; clean-invalidate before CPU RP+XP; actual AT read and write faults on all1024pages before SCM",
+    "control": "separate16KiB aligned NormalNC shared descriptor; real seven-argument extended-frame, region/source/dest independently checked",
+    "ownership": "HLOS3 -> CP_PIXEL10 permissionRW6; success requires real transport a0=0 and service a1=0; all failure/unknown resources retained until platform cold reset; no CPU data access after revoke",
+    "scope": "ownership diagnostic before unchanged stock/HFI batch; secure bank3 and secure HFI ACK remain disabled; no CP/PM4/PAS/fence/Metal",
+    "host_cases": 79
+  },
+  "secure_memory_r90": {
+    "hardware_tested": "PASS: actual six INFO available3F, independent4MiB CPU RP+XP/1024page AT faults; real MP_ASSIGN42000c16 returned a0=0/a1=0 in972us; before/after CRC checkpoints; stock GMU/HFI7ordinaryACKs pass afterwards; protected state unchanged, automatic recovery/capture",
+    "delta": "Native checkpoint adapter revalidates cold reset/ownership at notify TPL, lowers to application only for exact durable file snapshot, restores notify for every status. Failure aborts before SCM; actual status logged. Raw SCM result validity explicit; do not interpret callback transport failure as returned registers.",
+    "scope": "Same fixed six INFO queries and one private4MiB HLOS->CP_PIXEL assignment; no secure context/ACK, CP or PAS; original stock/HFI ordinary batch only after ownership success",
+    "host_cases": {
+      "seven_arg_ownership_failure_paths": 79,
+      "actual_native_TPL_adapter": 52
+    }
+  },
+  "secure_domain_r91": {
+    "hardware_tested": "Stopped before table share/secure MMIO/stock. CPU table allocation verified; actual CLANGPDB binary sign-extended high enum IOVA toFFFFFFFFF0000000 atc79c then stored to range atc7a4; page builder rejects32-bit aperture. Native data ownership passed; CRC/recovery/protected state verified.",
+    "sources": [
+      "OnePlus d763ed47 drivers/iommu/qcom-io-pgtable-alloc.c io_pgtable_hyp_assign_page: HLOS RW plus CP_PIXEL R",
+      "Ace5 aaa100d1 secure bank3 SID2, CP_PIXEL10 and native4K actual descriptor component8bb168ad"
+    ],
+    "preparation": "Before stock, build independent4page/893leaf graph mapping only actual captured0x37d000 secure data atF0000000, tail and all ordinary aliases absent; actual graph audits and CPU table cache publication; fixed MP_ASSIGN table share HLOS3 RW6 and CP_PIXEL10 R4 requires real a0=0/a1=0",
+    "activation": "Only exact actual v1 secure kind5/handle5/flags1007/size37d000/align0; same-boot private data ownership and CPU revocation plus table share required; bank3/ASID753 slot2 SID2, exact readbacks, bounded bank TLB sync, preserve live bank0/2",
+    "response": "Only after actual table/ownership/live-root checks: GPUF0000000, GMU0, preserve logicalsize/flags; no CPU secure data read or ordinary alias; duplicate/unknown resource stops",
+    "scope": "No CP/PM4/PAS/IRQ or hardware translation operation; context readback and HFI acceptance are not fence/Metal proof; all resources retained until cold reset",
+    "host_cases": {
+      "full893leaf_walk_and_context_faults": 1555,
+      "actual_native_secure_writer": 65569
+    }
+  },
+  "secure_domain_r92": {
+    "hardware_tested": "PASS real F0000000 4page893leaf graph; HLOS-RW CP-R table share a0/a1zero; bank3/ASID753/SID2 exact config/readback code0phase5, 240reads15writes, no valid fault; eighth secure ACK consumed. Next actual kind7/handle7 flags147 4KiB GPU-only; CRC/recovery/protected verified.",
+    "delta": "High32-bit IOVA is UINT32_C macro rather than an enum under Windows ARM64 MS ABI. Real target LLVM regression requires uint64 IOVA4026531840, original enum reproduces-268435456; actual previous DLL store disassembly proves failure. Add real range/build/audit/publication/descriptor stage diagnostics before table ownership or MMIO.",
+    "scope": "Same fixed independently-owned secure data, HLOS-RW CP-R table share and exact bank3/SID2 secure HFI resource; no new hardware operation or permissions"
+  },
+  "GPU_only_r93": {
+    "hardware_tested": "PASS GPU-only kind7/147 4KiB and subsequent shared preempt-scratch kind24/33f 4KiB consumed; all10resources ACKed and START final response accepted. Stock result0, HWSCHED result0 completed9. Secure domain and independent GPU6table1536leaf/GMU9table1675leaf preserved; valid CRC and protected state verified.",
+    "request": "r92 actual v1 kind7/handle7 flags147 size4096 align0 preemption counter; GFX-only, no GMU access",
+    "memory": "Separate1MiB NormalNC owned/zeroed backing at62000000, four256KiB exact GFX RO/RW privileged/unprivileged classes; absent from GMU graph; prepared/published before firmware",
+    "graphs": "Normal GPU6tablepages1536leaves9ranges; GMU remains9pages1675leaves11ranges/12original resources, secure graph remains4pages893leaves. Actual graph/CPU attributes verified before each ACK.",
+    "wire": "Known ordinary kinds only, preserve logicalsize/host/bufferable bits and requested GFX permissions; GPU62000000+class offset, GMU0. CACHE/secure/MMIO/memstore/fence still unsupported by ordinary backend. No active leaf edits.",
+    "allocation_ledger": "12original firmware records plus one independently retained GFX backing, capacity13 explicit; no GMU alias or false firmware resource count",
+    "host_cases": {
+      "planner": 2245,
+      "three_five_six_page_context_and_raw_leaf_walks": 1931,
+      "actual_allocator_ledger": 107,
+      "native_normal_writer": 65568,
+      "native_secure_writer": 65569
+    },
+    "CP_PM4_PAS_fence_Metal": false
+  },
+  "GX_OOB_r94": {
+    "hardware_tested": "PASS Device AT, blocking HFI30 ACK matched header150041e legacy3 value0; fresh OOB_ACK80000001 cleared only31 ->IRQ1; GXstatus3->0 fence0 busy71000000; RBBM1 RBBM3zero SQEcontrol0 read safely. code0 phase6, all3 SMMU FSR400; valid CRC/recovery/protected state verified. No CP/PM4.",
+    "sources": [
+      "OnePlus453d8875 adreno_gen7_gmu.c gen7_gmu_dcvs_set, gen7_gmu_oob_set, gen7_gmu_gx_is_on; gen7_reg.h offsets",
+      "Ace5 aaa100d1 gpu-native-hwsched.py minimum DCVS and OOB gated RBBM/SQE reads"
+    ],
+    "scope": "Only after complete actual HWSCHED START: fixed HFI30 blocking-ACK freq-index1 and BW-index1, one GPU OOB_SET bit30, fresh ACKbit31, exact own ACK W1C31; retain lease/resources until cold reset, no automatic OOB drop",
+    "GX_read_gates": "CPU AT Device mapping checked before execution; same-boot normal/secure graphs and roots, all relevant SMMU no active fault, actual GX status low2bits0, AHB fence0 and CX busy bit23clear; recheck before each gated read",
+    "read_only_registers": [
+      "RBBM_STATUS3d00840",
+      "RBBM_STATUS3d0084c",
+      "CP_SQE_CNTL3d02020"
+    ],
+    "poll_bounds": "HFI10000x10us, OOB10000x10us, GXready10000x10us; no artificial observation wait; individual MMIO itself cannot be preempted",
+    "no_CP_or_PM4_or_PAS": true,
+    "logging": "RAM only while stock firmware runs; after outer CM3 reset confirmed append full HFI reply, all masked validity/raw status and last operation before durable snapshot/automatic recovery",
+    "host_cases": {
+      "DCVS_OOB_fault_and_guard": 46,
+      "actual_native_GX_read_gates_and_exact_OOB_writes": 295011
+    }
+  },
+  "CP_code_r95": {
+    "hardware_tested": "PASS own SQE/AQE files and full sparse7page1567leaf graph, four exact base bindings verifiedF with SQEcontrol0 before/after; stock/HFI10resources pass; valid native CRC, automatic recovery/capture and protected state verified",
+    "assets": {
+      "gen70900_sqe.fw": {
+        "bytes": 85300,
+        "sha256": "8e2c5ce74140de7e161f14654b44de999855bce01b690fdd18c3358a73498cd1",
+        "crc32": "b2840b8d"
+      },
+      "gen70900_aqe.fw": {
+        "bytes": 33176,
+        "sha256": "25237c161d727b8ea92b4beb837a31651b44ea78bfc34d95672af8f346a45825",
+        "crc32": "0d3eee1a"
+      }
+    },
+    "memory": "Independent256KiB NormalNC CPU arena, no GMU alias; sparse GPU SQE63001000/21pages and AQE63021000/9pages RO-unprivileged executable; record6303f000 onepage RWpriv NX, all guards/padding absent or zero. Original4byte file header skipped; exact CRC/length/full-copy/padding readback before firmware starts.",
+    "graph": "NormalGPU7pages1567leaves12ranges before activation; GMU and secure graphs unchanged;14-entry independent allocation ledger. All data/table lifetimes retained until cold reset.",
+    "binding": "Only after full HWSCHED and qualified GX/OOB: four exact SQE/AQE low/high GPU address registers and readbacks, freshly require CP_SQE_CNTL0 before every operation and verify remains0. No enable/RAW, CP execution, trust change or PAS.",
+    "host_cases": {
+      "actual_files_copy_sparse_full_graph": 118666,
+      "bind_state_machine_faults": 27,
+      "actual_native_four_register_whitelist": 65673,
+      "actual_allocation_ledger": 122
+    }
+  },
+  "Gen7_config_r96": {
+    "hardware_tested": "PASS101/101steps,100writes178reads, TXDONE3 at first poll;75/75 actual live pairs in record6303f000 CRC3ec14bba, SQE0; stock/HWSCHED10resources pass, nativeCRC and protected state verified; auto capture retries USB port migration",
+    "register_facts_sha256": "491301ac6ad82be0b328e0b04ae846e7c1dd4deb014f21f580d3369228e10d1f",
+    "profile": "own FDT Adreno750v2 gen7_9_1 UBWC4 MAL32 HBB16; pinned vendor453d8875",
+    "operations": 101,
+    "powerup_pairs": {
+      "IFPC": 58,
+      "preemption": 17
+    },
+    "scope": "after actual HWSCHED/OOB/SQE-AQE bases, fixed GBIF/UCHE/UBWC/protected48/TSB/APRIV/AO-HWCG and realTXDONE; SQE disabled, IRQmask0, no CP/RAW/PAS/trust bypass or LLCC/LPAC/preemption enable",
+    "diagnostics": "each row validity, expected/actual values, first failure step, bounded1000x1us TXDONE; actual live register pairs into separate owned GPU-only record6303f000 with full CPU readback and publication; report after confirmed CM3reset only",
+    "host_cases": {
+      "portable_fault_and_side_effect": 765,
+      "actual_native_whitelist": 270817
+    }
+  },
+  "CP_init_r97": {
+    "hardware_tested": "Inconclusive: automatic recovery, last native CRC52169 bytes at before-stock-reset-release; no post-stock/aperture/RAW report committed. Cannot infer last executed step from this older checkpoint. Protected partitions/GPT/misc unchanged.",
+    "vendor_sources": [
+      "OnePlus modules453d8875 gen7_hwsched_gpu_boot/cp_init/gen7_cp_init_cmds/check_ack_failure",
+      "OnePlus kernel d763ed47 qcom_scm_kgsl_set_smmu_aperture and fixed CP_APERTURE_REG0"
+    ],
+    "scalar_SCM": "only actual same-epoch available42000c1b arginfo4 argsffff0000/ffffffff/ffffffff/ffffffff, bank0; reala0 transport semantics per vendorNULLresult, preservea1 raw; strict fresh/resume cookie and quarantine, no passed memory/PAS",
+    "first_RAW": "only11words HFI131 including 70970001/08000000/70c80007/94b/3/20000000/2/6303f000/0/80000000; all own tables/config/code/record ready; no direct SQE-control write or NOP",
+    "ACK": "exact sender header,size/type/id; vendor async word2 !=FFFFFFFF, no invented status; preserve complete reply and first8debug messages; fixed bounded waits and actual CXbusy idle/RBBM/SQE/IRQ observations",
+    "scope": "UEFI-only CP initialization experiment; no PAS/ZAP, secure-mode exit, fence, XNU/HFS, desktop acceleration or GPU IRQ enable; all allocations retained until cold reset",
+    "host_cases": {
+      "fixed_wire_guards_faults_timeout_debug": 82,
+      "actual_native_SCM_whitelist_and_busy_health": 262699
+    }
+  },
+  "Live_log_r98": {
+    "hardware_tested": "PASS real pre-CP live GMU snapshot: write/flush/readback78848bytes, status0, all3guards, TPL16->4->16 restored; stock/HWSCHED/Gen7 pass and resetheld. Final139530byte native file CRC17a3cb0d valid; original host128KiB cap misclassified it, re-read with512KiB parser sameSHA. Protected state verified, auto recovery.",
+    "scope": "Logging canary only; same full stock/HWSCHED/OOB/code/Gen7 batch, no aperture/RAW/CP executed. Then confirmed CM3 reset and normal report/cold recovery. Does not authorize file I/O after a CP command.",
+    "new_guard": "exact same epoch Gen7+owned record success, SQE0, GPU OOB held and power/fence checked, IRQ mask0 at primary000e0; all17HFI queues validated/empty; full normalGPU/GMU/secure graph roots audited, all retained ordinary CPU mappings validated before/after; no CP or aperture attempt",
+    "TPL": "NOTIFY16 -> APPLICATION4 only around existing validated UniXNU.log snapshot/flush/readback/CRC; unconditional restore to16 and guard-after. General filesystem buffers are outside retained device graphs. Failed guard means no file operation.",
+    "buffer_bytes": 524288,
+    "host_cases": {
+      "actual_TPL_fault_and_restore": 77,
+      "actual_native_queues_mappings_and_TPL": 81
+    }
+  },
+  "CP_init_r99": {
+    "hardware_tested": "Actual scalar aperture PASS: one call, valid result, a0=0 a1=0; second pre-RAW checkpoint83846bytes CRC33513187 valid. Automatic recovery later; CP dispatch/ACK/result not committed, no claim CP executed or passed. Protected boot/GPT/misc verified.",
+    "scope": "Same fixed r97 scalar aperture and first RAW payload, now after verified r98 pre-CP logging. No PAS/ZAP, secure-exit/fence/XNU/HFS.",
+    "checkpoints": [
+      "after full HWSCHED/OOB/code/config, before aperture",
+      "after actual aperturea0=0/realvalid/unquarantined success, before any RAW; preserve rawa1"
+    ],
+    "guards": "Only two exact pre-CP modes; require current-boot first live snapshot success/restored for second, phase2 aperture_attempted and correct live result, no RAW attempt; same full graph/CPU/power/OOB/IRQ/queue gates. No file snapshot after RAW until outer CM3 reset.",
+    "host_cases": {
+      "CP_wire_and_fault": 82,
+      "native_scalar_SCM": 262699,
+      "native_live_snapshot_gates": 91,
+      "TPL_restore_faults": 77
+    },
+    "host_capture": "512KiB same CRC/length/identity checks, stable native+XNU file reads; three identical stable invalid captures stop and preserve latest instead of unbounded recapture"
+  },
+  "CP_poll_r100": {
+    "hardware_tested": "Pre-RAW lease PASS: actual fast16 467us vs full721us, roots6 validated, fixedaperture a0/a1=0, second snapshot84124bytes CRC9d3e80d0. Later auto recovery, no CP result committed. Not proof CP executed or succeeded. Protected boot/GPT/misc verified.",
+    "scope": "Same first fixed CP_INIT only; full same-epoch CPU/normalGPU/GMU/secure graph audits before dispatch, then short read-only health polls. No new command payloads, PAS, IRQ enable, secure-exit, fence, XNU or HFS.",
+    "lease": "All allocation/attachment/retention/quarantine flags remain checked. Seven always-on clock/power reads precede gated register reads; nineteen registers plus six exact TTBRs each healthy poll; full same-epoch audit remains before RAW. All table allocations pinned outside device-writable ranges, no CPU table edits or FS while RAW outstanding.",
+    "diagnostics": "16-sample timing vs full guard recorded before RAW, first failing power/fault/root snapshot retained with validity masks, all last samples after CM3 reset. Failure never clears fault bits.",
+    "host_cases": {
+      "actual_native_register_root_and_ownership": 263749,
+      "fixed_CP_wire": 82,
+      "live_snapshot_gates": 91,
+      "TPL_adapter": 77
+    }
+  },
+  "CP_evidence_r101": {
+    "hardware_tested": "Automatic recovery at75.5s, final pre-RAW snapshot84124bytes CRC57bdeebf valid. No ACK/idle or confirmed-reset callback committed. Exact RAW dispatch boundary remains unproven. Protected boot/GPT/misc verified.",
+    "scope": "Same first fixed CP_INIT and same clock/root/ownership polls. No new GPU command, IRQ enable, PAS, secure-exit, fence, XNU or HFS.",
+    "idle_snapshot": "Only real CP ACK success phase6, CXbusy clear, RBBM0, IRQstatus0, IRQmask0, no SMMU error, all17queues empty, full owned graphs and retained resources; hll restores TPL16->4->16. No FS operation while RAW outstanding.",
+    "reset_snapshot": "Optional callback after real CM3 reset readback=1, before any post-reset fault MMIO; save RAM CP result and first-fault arrays without adding diagnostic MMIO. All allocations/gates retained. Failed reset never calls this callback.",
+    "reason": "Disambiguate CP failure from reset or later diagnostic failure with multiple guarded checkpoints in the same boot"
+  },
+  "CP_boundary_r102": {
+    "hardware_tested": "PASS: after aperture and post-file guards GET_VALUE125 replyvalue1/status0, all3guards/TPL restored, third snapshot89649bytes. Real core40020014=4.2.20/power40020010/HFI20060001. Confirmed CM3 reset snapshot95377bytes; stockresult0, final156884bytes CRC4f245d48 valid; protected state unchanged. NO RAW executed. Narrows prior failure to added first-RAW execution path, without claiming exact instruction.",
+    "scope": "Aperture, complete post-file guards, ordinary GET_VALUE125 and confirmed CM3 reset only; NO RAW/CP dispatch/PAS/IRQ change/secure-exit/fence/XNU/HFS.",
+    "query": "Repeat already proven initial warmboot-property GET_VALUE125 with fresh header sequence after aperture; exact ACK sender/type/count and real word3 status; value must1. Full standard graphs/CPU/queues validated at checkpoint.",
+    "version": "Five read-only DTCM words physical3d74fe0..3d74ff0 per pinned OnePlus gen7_gmu_version_info; current power/fault/retention guard before each. Record raw core/core-dev/power/power-dev/HFI, do not infer firmware version from filename.",
+    "diagnostic": "Prove the second pre-RAW snapshot returns and ordinary transport plus cleanup still works; prevent repeated unlocalized CP dispatch. Reuse early confirmed-reset checkpoint before fault MMIO.",
+    "host_cases": {
+      "actual_full_native_boundary_faults": 9,
+      "actual_CP_checkpoint_gates": 57,
+      "stock_reset_faults": 872
+    }
+  },
+  "CP_polled_irq_r103": {
+    "hardware_tested": "Actual mapping/GIC/local mask PASS: PAR17100b00, NSgroupffffffff, enable0, local0->03400042 readback equal; new preRAW snapshot94856bytes CRCe70c613f valid, later automatic recovery without CP return/reset result. Does not solve current first-CP path. Protected boot/GPT/misc unchanged.",
+    "vendor_source": "OnePlus graphics453d8875 adreno_gen7.h GEN7_HWSCHED_INT_MASK and gen7_hwsched_gpu_boot/gen7_enable_gpu_irq order; own FDT SPI300/GICD17100000, current core4.2.20",
+    "scope": "Reuse complete r102 no-RAW boundary in same boot, then program only local GPU error mask03400042 at3d000e0, verifyreadback and actual CPU AT Device mapping plus GICD IGROUPR10bit12=1/ISENABLER10bit12=0. No GIC writes or CPU IRQ enable; no error clear.",
+    "commands": "Only original fixed first11word CP_INIT RAW after new durable polled-IRQ checkpoint; independent adapter reuses exact same-boot actual scalar aperture (one valid call,a0zero, no quarantine) without a second SMC. No NOP/PAS/ZAP/mode-exit/fence/XNU/HFS.",
+    "polling": "Every RAW health checks existing clock/power/fault/roots/retention plus current GIC NS-group/disabled and local mask exact. Save only realACK/idle or confirmed reset. Keep allocations/gates until cold reset.",
+    "host_cases": {
+      "actual_native_mask_whitelist_lease_partial_write": 65624,
+      "native_CP": 263749,
+      "boundary": 9,
+      "CP_checkpoint": 57,
+      "live_checkpoint": 91
+    }
+  },
+  "CP_read_fault_r104": {
+    "hardware_tested": false,
+    "scope": "Same complete r103 protocol, polled local error mask and first fixed CP_INIT; only read wrapper/precise exception propagation added. No new hardware write target/value or CP payload/PAS/secure-exit/fence/XNU/HFS.",
+    "policy": "Only armed exact GPU-owned LDR32/LDR64 + RET leaf, known qualified GPU/clock/GIC address, same-EL synchronous external read abort EC25/IL1/DFSC10, WnR0/FAR-valid/notPTW and exact PC/X0/FAR/opcode. First fault in CPU RAM; handler changes X0placeholder/ELR+4 only. Wrapper always returns failure and leaves caller output untouched. No BS/file/MMIO access in handler.",
+    "excluded": "No SError, asynchronous abort, write, other PC, UFS/OEM instruction, random read retry or arbitrary fault resume. Failure still stops normal hardware state machine and all resources retained.",
+    "read_sites": "CP power/fault/root/status polling and polled GIC lease; existing allowed GPU bus/GMU/stock/context/FAR readers use same wrapper. Existing out-of-window PDC reads unchanged. Failed context read is not retried through fallback.",
+    "host_cases": {
+      "actual_handler_and_begin": 524723,
+      "actual_output_wrappers": 6,
+      "native_CP_propagation": 263774,
+      "native_IRQ_propagation": 65627,
+      "native_DMA_whitelist": 786684
+    }
+  }
+}

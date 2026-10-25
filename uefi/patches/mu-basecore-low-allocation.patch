@@ -1,0 +1,20 @@
+diff --git a/MdeModulePkg/Core/Dxe/Mem/Page.c b/MdeModulePkg/Core/Dxe/Mem/Page.c
+index 6a4f7a1..2ddc232 100644
+--- a/MdeModulePkg/Core/Dxe/Mem/Page.c
++++ b/MdeModulePkg/Core/Dxe/Mem/Page.c
+@@ -1092,6 +1092,15 @@ FindFreePages (
+ {
+   UINT64  Start;
+ 
++#if defined (HOUJI_LOW_UEFI_ALLOCS)
++  // OEM DXE drivers may retain 32-bit physical addresses. Keep automatic
++  // allocations below 4 GiB; DarwinBoot explicitly reserves high DRAM with
++  // AllocateAddress, which does not call this search function.
++  if (MaxAddress > 0xFFFFFFFFULL) {
++    MaxAddress = 0xFFFFFFFFULL;
++  }
++#endif
++
+   //
+   // Attempt to find free pages in the preferred bin based on the requested memory type
+   //

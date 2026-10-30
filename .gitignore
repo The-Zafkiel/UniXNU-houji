@@ -1,20 +1,33 @@
+# Personal inputs, extracted operating systems, caches, generated artifacts
 /.cache/
+/.deps/
+/.local/
 /out/
+/build/
 /local.toml
-/__pycache__/
+/configs/local*
+# Original single-machine experiments remain local; public copies are in archive/.
+/native/
+/scripts/
+/tests/
 **/__pycache__/
 *.pyc
-
-# Local inputs, device artifacts and build products are not source exports.
-*.ipsw
+*.o
+*.a
+*.dylib
+*.dSYM/
+*.log
 *.img
 *.dmg
+*.hfsx
+*.ipsw
+*.macho
 *.efi
 *.dll
-*.fd
-*.mbn
-*.fw
-*.pyc
-/private/
-/artifacts/
-/Build/
+*.bin
+*.partial
+*.delta
+*.zip
+*.tar
+*.tar.gz
+.DS_Store

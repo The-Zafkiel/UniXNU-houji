@@ -1,4 +1,4 @@
-# Xiaomi 14 / houji. Initial port: RAM-only firmware and single-core XNU.
+# Xiaomi 14 / houji. Darwin 22 / iOS 16 native UFS port; eight CPU cores.
 [board]
 name = "houji"
 soc = "SM8650"
@@ -16,7 +16,7 @@ chip_id = 0x8015
 board_id = 0x06
 fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
 
-# Member pins from the owner-provided 20H392 archive; see docs/ios-input.md.
+# Member pins from the locally supplied 20H392 archive; see docs/development.md.
 [ipsw.sha256]
 "kernelcache.release.iphone10b" = "2d6a13d040aaf87cec09bb6906d43e9bd8cea951e43d1aa1cd62707dfdc5aaec"
 "DeviceTree.d22ap.im4p" = "480e8b0888949b4128b7aa2cd254497581c69e1bafa596a760b2fa955a8a6368"

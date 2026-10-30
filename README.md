@@ -1,123 +1,85 @@
-# UniXNU-houji
+<div align="center">
 
-> 开发源码快照，GPU 未完成；构建依赖、设备绑定与发布范围见 [源码快照说明](SOURCE_SNAPSHOT.md)。
+# UniXNU · houji
 
-小米 14（23127PN0CC / houji / SM8650）的 UniXNU 移植工作树。
-目标是运行原生 iOS 16.7.16 用户态，逐步完成硬件适配。
+**小米 14 的原生 iOS 移植**
 
-当前阶段（2026-10-25）：UEFI → DarwinBoot → 八核 XNU → 原生 UFS/HFSX 根卷
-→ iOS 桌面已在小米 14 显示；r56 由用户确认 1200×2670 全屏、触控准确，
-设置列表滚动相较 r54 明显改善。但进入“关于本机”会导致可见界面无响应，正在定位；
-内核仍可保存日志并自动返回 OrangeFox。稳定回退保留 r54。
-r58 加入边缘触点标记与原生 `pid_hibernate` 系统调用后，用户确认最近任务卡片可用。
-“关于本机”已定位到网络接口枚举等待。按用户最新优先级，当前首先推进 GPU。
-本轮使用 8 GiB 内存、两颗 A520、五颗 A720、一颗 X4 和参考项目配置的系统卷启动基线，
-保留 Setup 与激活服务；r53 合并首次设置完成标志，r54 加入官方开发板 ADT 属性，
-在没有 Wi-Fi 的情况下越过首次设置。r47 的 120 次用户态采样及返回 Recovery 后的日志校验通过。
-r52 已由用户确认 Hello／设置界面可实际触摸操作；日志记录 78 个物理触点报告及
-78 次 SweetHID 调用。Wi-Fi 等其他硬件和完整 iOS 功能仍未验证。
-定位服务的消息等待仍存在，首次启动采用版本迁移基线越过等待，未修复定位。
-参见 [启动基线与参考记录](docs/migration-upstream-research.md)。
-无 Wi-Fi 时的可恢复首次设置配置见 [离线跳过设置](docs/skip-setup.md)。
+Snapdragon 8 Gen 3 · Adreno 750 · Darwin 22
 
-用户已明确允许清空系统和个人数据，12 GiB iOS 系统卷已写入现有 userdata。
-安装后完整 O_DIRECT 读取的 SHA256 与源镜像一致；根卷保存在 UFS，未上传 RAM。
-37 个关键分区、六个 LUN 的双 GPT 及原 recovery 均已备份。当前读取环境是
-OrangeFox root ADB；请保持恢复环境，不要让 Android 初始化 userdata 或在 recovery 格式化 data。
-详见 [实机记录](docs/bringup.md)。
+[功能状态](#功能状态) · [开发指南](docs/development.md) · [代码结构](docs/architecture.md) · [问题反馈](https://github.com/lonzzi/UniXNU-houji/issues)
 
-[CPU 接入与调度参考](docs/cpu-scheduling.md)记录了 ArmCpu、Ace 5 Pro、Linux 和
-XNU 的实现比较。r55 实机通过八核 MIDR、绑定任务、定时中断和核间中断预检，
-r56 八核已运行 iOS 用户态。当前采用 Clutch SMP，尚未完成大小核能力感知调度或动态调频。
-CPU0 旧版短时只读采样约 1.69 GHz，不能代表八颗核心当前频率。
-显示仍由 CPU 渲染；[显示与性能记录](docs/display-performance.md)区分已验证结果与待修问题，
-[GPU 调研](docs/gpu-research.md)记录 A750 和其他平台最新代码的可复用边界。
-GPU 专项已实机通过 CX/时钟、CM3 与 DMA 正反例、原厂 GMU/HFI 启动，
-以及八条调度初始化消息。独立 GPU/GMU 页表的实际遍历、上下文配置回读、
-多类权限和七块普通缓冲区分配应答已验证；4 MiB 安全数据的 CPU 访问撤销和
-Qualcomm HLOS→CP_PIXEL 真实所有权转换也已实测通过。r92 已通过独立安全页表
-共享、bank3 配置回读和安全内存应答。r93 已完成全部 10 条分配与 HWSCHED START；
-r94 已验证 GPU OOB 唤醒、电源/时钟就绪及受保护的状态读取，
-r95/r96 已验证 SQE/AQE 微码内存及地址绑定、101 步 Gen7 配置和 75 对恢复记录。
-正在验证首次 CP 初始化；尚未完成可用的 GPU 命令提交、
-fence 或 Metal 桌面加速。本机 ZAP 固件已从 odm_a 只读取得，尚未执行。
-专项测试合并采样并直接返回 OrangeFox；启动命令自动后台轮询，返回后抓取
-运行编号与 CRC 校验的日志。这些 UEFI 专项不启动 XNU，不改 iOS 系统卷。
+</div>
 
-Recovery 已确认 Synaptics S3910／TouchCom v1、10 点触摸和 1199 × 2669 原生坐标。
-触控已通过原厂电源／时钟交接、GPIO SPI、芯片默认 TouchCom 描述符接入 XNU HID，详见
-[触控适配记录](docs/touch-bringup.md)。
+基于 [UniXNU](https://github.com/UniXNU/UniXNU) 生态，为小米 14（`houji`）适配 UEFI、XNU 内核、硬件驱动及 iOS 用户空间。目前已经能够进入 iOS 桌面，使用原生分辨率显示、触控、八核 CPU 和实验性的 Adreno 图形加速。
 
-- 固件源码在相邻 `uefi-houji`，以 Mu-Silicium `42fe5637` 为基础，新增 `houjiPkg`。
-- 内存来自当前设备的 xbl_config 和 live FDT；41 段内存由 libfdt 独立核对。
-- OEM EnvDxe 来自本机原厂 uefi 分区的只读备份；二进制在仓库外。
-- 第一阶段固件不装载存储驱动。变量保存在 RAM；Capsule 协议始终拒绝更新。
-- 使用 `fastboot boot` 临时启动。检查点通过 BCB 返回 OrangeFox，保留 misc 的
-  reserved/A/B 数据。recovery_a 已安装经过验证的 houji 恢复镜像；GPT 分区边界不变，
-  sde 两项启动槽位属性的修复变化已单独审计并固定。
-- [iOS 测试输入](docs/ios-input.md)固定为用户提供的 iPhone X 16.7.16 / 20H392。
-- Apple XNU 8796.141.3 的早期内核和后续 GUI/HFS 兼容内核分别保留。
-  当前 GUI 内核已实机挂载根卷并运行用户态；构建仍属于实验性开发配置。
-- 单核内核、Apple ADT 和 DarwinBoot 装入 64 MiB 只读 FAT RAM 盘。
-  第二版把整个 RAM 盘嵌入压缩 Image，避免依赖 Android 引导器对 boot ramdisk 的选择。
-  驱动仅在已保留的 Kernel 内存区寻找标签、大小和 CRC 均匹配的载荷，不扫描任意物理内存。
-- 第三版 ADT 补齐 NVRAM 属性和一个空的 8 KiB CHRP proxy bank，借助实际 XNU
-  源码中的检查函数验证头部 checksum、Adler32 和分区边界；没有物理 NVRAM 控制器。
-  实机已越过第二版的 NVRAM panic。
-- UEFI 诊断文字及 XNU 正常检查点的消息尾部已能保存到 logfs，返回 OrangeFox
-  后核验运行编号和 CRC 并取回。实时 USB CDC ACM 与任意 panic 自动保存仍未实现。
+项目仍处于开发阶段。GPU 性能、颜色与部分应用的兼容性尚有问题，暂不适合作为日常系统，也没有面向普通用户的一键刷机包。
 
-## 已解决的启动问题
+## 目标设备
 
-1. `EnvDxeEnhanced / AutoGen.c:650`：保留区必须命名为 `FD_Reserved`，供
-   PlatformPeiLib 从原厂固件保留区发现 Scheduler Interface HOB。第二次启动确认通过。
-2. `DxeMain.c:561`：补齐 Capsule 架构协议。设备专用 NoCapsuleRuntimeDxe
-   对更新和查询能力均返回 EFI_UNSUPPORTED，不包含固件更新实现。
-3. `BmDriverHealth.c:553`：精简固件没有 FormBrowser2；按上游说明把
-   PcdDriverHealthConfigureForm 设为 ZeroGuid，关闭对应修复页面。第四次启动确认进入菜单。
+| 项目 | 配置 |
+| --- | --- |
+| 机型 | Xiaomi 14 / 小米 14，`houji` |
+| 已测试型号 | 23127PN0CC |
+| SoC | Qualcomm SM8650，Snapdragon 8 Gen 3 |
+| GPU | Adreno 750 |
+| 显示 | 1200 × 2670，原生像素输出 |
+| 测试系统 | iOS 16.7.16，20H392，iPhone X / `d22ap` 用户空间 |
+| 内核 | Darwin 22，自行编译的 XNU 8796.141.3 |
+| 引导 | Mu-Silicium UEFI → DarwinBoot → XNU |
 
-## 本地构建
+## 功能状态
 
-`scripts/build-uefi.sh UEFI_ROOT UNIXNU_ROOT VENDOR_ROOT` 在已准备好的 Linux ARM64
-构建环境中调用固定 Mu BaseTools 和 CLANGPDB。`VENDOR_ROOT` 必须含本机提取的
-HoujiVendorPkg 和 provenance manifest。构建脚本本身不操作设备。
+| 功能 | 状态 | 说明 |
+| --- | --- | --- |
+| UEFI 与系统启动 | 可用 | 已实机进入锁屏、桌面和设置 |
+| CPU 多核 | 可用 | 八核启动，适配大小核分组与调度 |
+| CPU / GPU 调频 | 实验性 | 使用厂商频点表；温度反馈和热保护尚未验证 |
+| 显示与触控 | 可用 | 原生分辨率、全屏触控、返回与最近任务手势 |
+| 系统键盘 | 可用 | 设置、主屏搜索、App 资源库的宽度适配 |
+| UFS 系统卷 | 可用 | 当前开发配置使用 32 GiB HFSX 卷 |
+| Adreno 图形加速 | 部分可用 | 已有真实命令提交、GPU 写回和桌面渲染；掉帧、紫色阴影、文字异常仍待修复 |
+| 墙纸与照片 | 部分可用 | 墙纸内容可部分显示，预览及照片应用仍不稳定 |
+| 日志与恢复 | 可用 | 保存带校验的检查点，返回 OrangeFox 后读取；早期硬件锁死仍可能需要手动重启 |
+| Wi-Fi / 蓝牙 / 蜂窝 | 待适配 | 尚未完成可用性验证 |
+| 声音 / 亮度 / 充电管理 | 待适配 | Recovery 中工作不代表 iOS 驱动已经可用 |
+| Safari 等应用 | 待验证 | 依赖网络和图形兼容性继续完善 |
 
-构建 BootShim 后，`scripts/pack-uefi.py` 生成 Android header v4 的 RAM 启动镜像，
-并解包逐字节比对 BootShim、FD、DTB，验证 ARM64 Image 大小和错误输入拒绝行为。
-使用当前设备采集的 DTB，不使用参考机的设备树。
+软件刷新通知已尝试提高到 120 Hz，**这不代表面板已在 120 Hz 扫描，也不代表桌面能达到 120 FPS**。当前优化重点是渲染正确性、提交开销和显示输出路径。
 
-带 XNU 的构建需先以 `make-ram-payload.py --inputs PAYLOAD_DIR --output PAYLOAD.img`
-生成 RAM 盘，再设置 `HOUJI_RAM_PAYLOAD=PAYLOAD.img` 运行固件构建。
-`pack-uefi.py --ramdisk PAYLOAD.img --payload-in-image` 把载荷放在 FD 后的 4 KiB
-边界，更新 ARM64 image_size；BootShim 仍只把 FD_SIZE 字节重定位到固件地址。
-解压后的完整 Image 小于 256 MiB Kernel 保留区。没有给 Android boot header 添加 ramdisk，
-也不依赖参考机的高位 DDR 地址。
+## 开发
 
-`scripts/prepare-ios16-early.py` 仅选取固定 Vermeer 参考版本的早期 20 个补丁，
-调整屏幕与 CPU 匹配；不引入参考机的 UFS、USB、触摸或电源驱动。
-该早期内核只用于内存中验证内核入口和单核调度，不含系统卷。
+仓库包含板级源码、固定版本的上游补丁、图形适配和离线检查工具。iOS 镜像、KDK / SDK、厂商固件及分区备份需要自行准备，均不随仓库分发。
 
-当前 XNU 主机编译适配包含 Xcode 27 IIG 输出转换：保持 Darwin 22 原有的
-四字段 IORPC ABI，通过既有 Mach 消息解码函数访问内容；没有修改运行时 IORPC 布局。
-内核版本属于 Darwin 22 的早期移植基线，并非 IPSW 中未经修改的 T8015 内核。
-
-## Mac 日志
-
-`scripts/capture-usb-log.py` 可列出 Mac 当前的 CDC ACM 串口，并在明确选择端口后采集原始日志。
-在手机固件的 USB 串口驱动完成前，它不会使手机自动获得 USB 功能。
-
-```sh
-python3 scripts/capture-usb-log.py
-python3 scripts/capture-usb-log.py --port /dev/cu.usbmodemDEVICE --output /absolute/path/uefi.log
+```bash
+git clone https://github.com/lonzzi/UniXNU-houji.git
+cd UniXNU-houji
+python3 tools/check-source-tree.py
+python3 tools/run-host-checks.py
 ```
 
-存储诊断快照已在实机验证，可用下列命令只读取回：
+离线检查验证频点策略、HFI 数据和缓冲区回收的已知回归，不模拟手机或 GPU。源码组装、构建依赖及实机验证流程见 [开发指南](docs/development.md)。
 
-```sh
-python3 scripts/capture-logfs.py --adb-port 5038 --recovery --output /absolute/path/new-capture
-```
+## 代码导航
 
-实际端口以 ADB 连接为准，支持 5037/5038/5047。`UniXNU.log` 只含 UEFI 应用
-文字；`XnuLog.bin` 为已提交的原生快照，校验通过后导出 `XnuLog.txt`。
-后续运行先归档上一轮文件，再重新绑定运行编号、预分配数据扇区和启动镜像；
-旧镜像不会静默覆盖另一轮日志。
+| 目录 | 内容 |
+| --- | --- |
+| [`kernel/`](kernel) | XNU 补丁、八核与调频、UFS、触控、显示和 GPU 内核实现 |
+| [`uefi/`](uefi) | houji 板级覆盖层、BootShim 与 Mu_Basecore 补丁 |
+| [`bootloader/`](bootloader) | DarwinBoot 的设备树、内存与 GPU 状态交接 |
+| [`graphics/`](graphics) | AdrenoMetal 前端、metal2vulkan 适配、Turnip Darwin 后端 |
+| [`userland/`](userland) | 键盘几何、导航与墙纸等用户空间适配 |
+| [`tools/`](tools) / [`checks/`](checks) | 源码准备、构建入口与离线回归检查 |
+| [`docs/`](docs) | 开发、架构、已知问题与恢复说明 |
+| [`archive/`](archive) | 历史实验源码与调查资料，供追溯参考 |
+
+当前依赖版本由 [`sources.lock.json`](sources.lock.json) 固定。修改应以各组件的有效覆盖层和补丁为准，历史实验目录不作为默认构建入口。
+
+## 参与贡献
+
+欢迎提交可复现的问题和小范围补丁。反馈请附上源码版本、测试镜像标识、预期行为与实际表现；日志中请移除设备标识及个人信息。提交规范和验证要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 致谢与许可
+
+感谢 [UniXNU](https://github.com/UniXNU)、[Mu-Silicium](https://github.com/Project-Silicium/Mu-Silicium)、[Apple Open Source](https://github.com/apple-oss-distributions/xnu)、[Mesa](https://mesa3d.org/)、[AdrenoMetal](https://github.com/UniXNU/AdrenoMetal)、[metal2vulkan](https://github.com/steelbrain/metal2vulkan)，以及 [sheng](https://github.com/UniXNU/UniXNU-sheng)、[一加 Ace 5](https://github.com/tycykp/UniXNU-OnePlus-Ace5)、[小米 17 Pro](https://github.com/ShueiTsuki/data-a-live)、[小米 13 Ultra](https://github.com/markakash/UniXNU-ishtar-old) 等移植项目提供的实现和调查资料。
+
+本仓库包含多种许可证的代码，保留各文件及上游原有条款。详见 [COPYING.md](COPYING.md)。

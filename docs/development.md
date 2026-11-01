@@ -20,6 +20,13 @@ python3 tools/check-source-tree.py
 python3 tools/run-host-checks.py
 ```
 
+检查需要 Python 3.12+、Clang（含 ASan/UBSan/TSan 运行库）及 Rust 1.98.0。
+默认在 Apple Silicon macOS 执行全部检查，其他主机执行可移植检查并明确报告未覆盖的项目。
+可用 `--suite portable` 单独检查公共逻辑，或在 Apple Silicon macOS 使用 `--suite apple`
+检查 Foundation、Metal、IOSurface、Mach 采样及 Darwin 日志线程。
+CI 分别运行 Ubuntu 24.04 的可移植检查和 macOS 15 的完整检查；不会以 Linux 通过代替
+Apple 接口验证。这里的 macOS 检查仍不执行手机 GPU。
+
 检查覆盖 GPU 的 12 个频点、上限取整、突发负载与空闲降频、HFI 表一致性、CPU 交互升降频和 Turnip BO 复用回归；另外编译有效 Submit/VM/SMMU 源码，在 4 KiB/16 KiB CPU 页的主机替身上验证缓存维护、TLB 同步、地址复用及失败隔离。板级提交门、显示队列和 shader 预热检查也执行有效源码中的函数。另测 TSENS 有效位/有符号温度/滞后与丢失读数，以及亮度范围、渐变和 DSI FIFO 的忙碌/超时/恢复。BO 检查会在同一线程交错条件下验证旧函数失败、修复函数通过。ASAN/UBSAN 检查不仿真 GPU 命令执行或证明实际 FPS。
 
 GPU 参数、显示/预热行为和实机对照流程见 [性能修复](performance.md)。

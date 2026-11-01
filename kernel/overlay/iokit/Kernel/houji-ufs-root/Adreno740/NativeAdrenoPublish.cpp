@@ -1159,7 +1159,7 @@ extern "C" IOReturn native_adreno_provider_desktop_stats(uint64_t out[7]){
  */
 extern "C" unsigned native_adreno_present_sync_snapshot(char *out,unsigned capacity){
  if(!out || !capacity)return 0;
- uint64_t v[14];for(unsigned i=0;i<14;i++)v[i]=__atomic_load_n(&gHoujiPresentSync[i],__ATOMIC_RELAXED);
+ unsigned long long v[14];for(unsigned i=0;i<14;i++)v[i]=__atomic_load_n(&gHoujiPresentSync[i],__ATOMIC_RELAXED);
  int n=snprintf(out,capacity,"HOUJI PRESENT SYNC: attempts=%llu granted=%llu gate-busy=%llu GPU-pending=%llu observed-fence=%llu max-hold-us=%llu lock-wait-us=%llu max-lock-wait-us=%llu; cached CPU observations\nHOUJI PRESENT WAKE: sleeps=%llu event-wakes=%llu expired=%llu sleep-us=%llu signals=%llu; pending checks may repeat; no GPU IRQ or panel vblank\n",v[0],v[1],v[2],v[3],v[4],v[6],v[7],v[8],v[9],v[10],v[11],v[12],v[13]);
  if(n<=0 || (unsigned)n>=capacity){out[0]=0;return 0;}return (unsigned)n;
 }

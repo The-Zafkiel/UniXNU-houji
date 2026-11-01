@@ -1,72 +1,103 @@
 #!/usr/bin/env python3
-"""Run bounded policy and BO reuse regression checks. Does not emulate a GPU."""
+"""Run portable fixtures and Apple runtime checks; does not emulate a GPU."""
+import argparse
 from pathlib import Path
+import platform
 import subprocess
 import tempfile
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-with tempfile.TemporaryDirectory(prefix='houji-check-') as temporary:
-    for filename, compiler, standard in [
-        ('gpu-governor.cpp', 'clang++', 'c++17'),
-        ('gpu-hfi.c', 'clang', 'c11'),
-        ('cpu-governor.cpp', 'clang++', 'c++17'),
-        ('power-display.cpp', 'clang++', 'c++17'),
-        ('sample-retention.c', 'clang', 'c11'),
-    ]:
-        binary = Path(temporary) / Path(filename).stem
-        subprocess.run([compiler, '-std=' + standard, '-Wall', '-Wextra', '-Werror', str(ROOT / 'checks' / filename), '-o', str(binary)], check=True)
-        subprocess.run([str(binary)], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/cpu-lut.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-input-prewarm.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/cpu-snapshot.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/backlight-properties.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-survey.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-sparse-survey.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-protocol.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-startup.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-firmware.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-cmd-db.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-spi.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-adsp-codecs.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-adsp-policy.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/battery-publisher.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/turnip-bo-retire.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/turnip-bo-cache.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/native-gpu/run.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/native-gpu/transport.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/native-gpu/board-gate.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/native-gpu/dispatch-gate.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/native-gpu/fence-poll.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-address-space.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-client-slots.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-coherence.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-latency.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-issuer-trace.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/shader-prime.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/metal-constants.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/texture-properties.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/metal-render-pass.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/texture-init-probe.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-memory-pressure.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-memory-cache.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-room-worker.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-stage-trace.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/gpu-cpu-profile.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/metal-device-answers.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/metal-no-copy-pages.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/metal-surface-use.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/display-queue.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/display-snapshot.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/display-timing.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/boot-arguments.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/build-inputs.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/recovery-logs.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/userland-logs.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/metal-async.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/metal-trace-id.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/network-stack.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/system-apps.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/system-app-dyld.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/tcc-media-compatibility.py')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'checks/metal-command-dictionary.py')], check=True)
+APPLE_CHECKS = ('gpu-stage-trace.py', 'gpu-cpu-profile.py', 'metal-surface-use.py', 'metal-async.py', 'metal-trace-id.py', 'metal-command-dictionary.py')
+CHECKS = (
+    'cpu-lut.py',
+    'gpu-input-prewarm.py',
+    'cpu-snapshot.py',
+    'backlight-properties.py',
+    'battery-survey.py',
+    'battery-sparse-survey.py',
+    'battery-protocol.py',
+    'battery-startup.py',
+    'battery-firmware.py',
+    'battery-cmd-db.py',
+    'battery-spi.py',
+    'battery-adsp-codecs.py',
+    'battery-adsp-policy.py',
+    'battery-publisher.py',
+    'turnip-bo-retire.py',
+    'turnip-bo-cache.py',
+    'native-gpu/run.py',
+    'native-gpu/transport.py',
+    'native-gpu/board-gate.py',
+    'native-gpu/dispatch-gate.py',
+    'native-gpu/fence-poll.py',
+    'gpu-address-space.py',
+    'gpu-client-slots.py',
+    'gpu-coherence.py',
+    'gpu-latency.py',
+    'gpu-issuer-trace.py',
+    'shader-prime.py',
+    'metal-constants.py',
+    'texture-properties.py',
+    'metal-render-pass.py',
+    'texture-init-probe.py',
+    'gpu-memory-pressure.py',
+    'gpu-memory-cache.py',
+    'gpu-room-worker.py',
+    'gpu-stage-trace.py',
+    'gpu-cpu-profile.py',
+    'metal-device-answers.py',
+    'metal-no-copy-pages.py',
+    'metal-surface-use.py',
+    'display-queue.py',
+    'display-snapshot.py',
+    'display-timing.py',
+    'boot-arguments.py',
+    'build-inputs.py',
+    'recovery-logs.py',
+    'userland-logs.py',
+    'metal-async.py',
+    'metal-trace-id.py',
+    'network-stack.py',
+    'system-apps.py',
+    'system-app-dyld.py',
+    'tcc-media-compatibility.py',
+    'metal-command-dictionary.py',
+)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--suite', choices=('auto', 'portable', 'apple', 'all'), default='auto',
+                        help='auto runs all on Apple Silicon, portable elsewhere')
+    suite = parser.parse_args().suite
+    apple_host = platform.system() == 'Darwin' and platform.machine() == 'arm64'
+    if suite == 'auto':
+        suite = 'all' if apple_host else 'portable'
+    if suite in ('apple', 'all') and not apple_host:
+        parser.error('Apple runtime checks require an Apple Silicon macOS host with Xcode')
+    print(f'Host check suite: {suite} ({platform.system()} {platform.machine()})', flush=True)
+    if suite == 'portable':
+        print('Apple runtime checks are not covered here; CI runs them separately on macOS.', flush=True)
+    if suite != 'apple':
+        with tempfile.TemporaryDirectory(prefix='houji-check-') as temporary:
+            for filename, compiler, standard in [
+                ('gpu-governor.cpp', 'clang++', 'c++17'),
+                ('gpu-hfi.c', 'clang', 'c11'),
+                ('cpu-governor.cpp', 'clang++', 'c++17'),
+                ('power-display.cpp', 'clang++', 'c++17'),
+                ('sample-retention.c', 'clang', 'c11'),
+            ]:
+                binary = Path(temporary) / Path(filename).stem
+                subprocess.run([compiler, '-std=' + standard, '-Wall', '-Wextra', '-Werror', str(ROOT / 'checks' / filename), '-o', str(binary)], check=True)
+                subprocess.run([str(binary)], check=True)
+    selected = [name for name in CHECKS
+                if suite == 'all' or (name in APPLE_CHECKS) == (suite == 'apple')]
+    for name in selected:
+        print('CHECK: ' + name, flush=True)
+        subprocess.run([sys.executable, str(ROOT / 'checks' / name)], check=True)
+    print(f'PASS: {suite} suite completed; no GPU or frame-rate qualification', flush=True)
+
+
+if __name__ == '__main__':
+    main()

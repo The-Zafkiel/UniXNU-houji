@@ -115,7 +115,7 @@ int main(int argc,char **argv){
 }
 ''')
     executable = tmp / 'writer'
-    subprocess.run(['xcrun', 'clang++', '-std=c++17', '-O2', '-I',
+    subprocess.run(['clang++', '-std=c++17', '-O2', '-I',
                     str(ROOT/'graphics/metal/AdrenoMetal'), str(cpp), '-o', str(executable)], check=True)
     subprocess.run([str(executable), str(tmp)], check=True, timeout=30)
 spec = importlib.util.spec_from_file_location('gpu_stages', ROOT / 'tools/analyze-gpu-stages.py')

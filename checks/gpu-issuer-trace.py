@@ -103,7 +103,7 @@ with tempfile.TemporaryDirectory(prefix='houji-issuer-trace-') as directory:
     path = Path(directory)
     cpp, binary = path / 'issuer.cpp', path / 'issuer'
     cpp.write_text(unit)
-    subprocess.run(['xcrun', 'clang++', '-std=c++17', '-O1', '-g',
+    subprocess.run(['clang++', '-std=c++17', '-O1', '-g',
                     '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                     '-I', str(GPU), str(cpp), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=60)

@@ -37,6 +37,10 @@ with tempfile.TemporaryDirectory(prefix='houji-prime-') as temporary:
 #include <algorithm>
 #include <fts.h>
 #include <sys/stat.h>
+#if !defined(__APPLE__)
+// Match Darwin's stat field spelling in the extracted production functions.
+#define st_mtimespec st_mtim
+#endif
 static uint64_t clockMs=0,busyUntil=0,swipeAgainAt=0,swipeAgainUntil=0;
 static bool pendingOnly=false;
 static uint32_t native_prime_rate=0,native_prime_compiling=0;

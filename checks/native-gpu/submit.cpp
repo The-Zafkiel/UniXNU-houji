@@ -126,9 +126,10 @@ static int exposed(Path &p,bool write_combined=false,bool full_aperture=false,bo
     if(NativeAdrenoPrepareSmmuMemory(&p.tables,32,full_aperture?36:40,full_aperture?0:0x800000,
         full_aperture?HOUJI_GPU_APERTURE:65536,0,full_aperture?HOUJI_GPU_APERTURE/4096:16,&p.arena,&p.state,&p.visibility))
         return kIOReturnBadArgument;
-    context=(ArmSmmu4KContextConfig){.lower=&p.arena.config,.lower_tables=&p.state.tables,
+    context=(ArmSmmu4KContextConfig){.lower=&p.arena.config,.upper=nullptr,
+        .lower_tables=&p.state.tables,.upper_tables=nullptr,
         .id0=mmio[0x20/4],.id2=mmio[0x28/4],.asid=1,.coherent_walk=1,
-        .stall_on_fault=0,.continue_after_fault=1};
+        .stall_on_fault=0,.continue_after_fault=1,.polling_faults=0};
     ArmSmmu4KContextConfig actual=context;
     CHECK(ArmSmmu4KEncodeContext(&actual,&context_image)==ArmSmmu4KSuccess);
     mmio[0x1008/4]=context_image.cbar;mmio[0x1808/4]=context_image.cba2r;

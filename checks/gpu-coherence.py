@@ -65,5 +65,7 @@ int main(){
 with tempfile.TemporaryDirectory(prefix='houji-coherence-') as d:
     d=Path(d);src=d/'proof.cpp';binary=d/'proof';obj=d/'pm4.o';src.write_text(unit)
     subprocess.run(['clang','-std=c11','-fsanitize=address,undefined','-I',str(GPU),'-c',str(GPU/'AdrenoPM4.c'),'-o',str(obj)],check=True)
-    subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I',str(GPU),str(src),str(obj),'-o',str(binary)],check=True)
+    # This C header intentionally zero-initializes omitted aggregate fields.
+    # Clang 18 warns when it is included by the C++ fixture, unlike a C TU.
+    subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-missing-field-initializers','-fsanitize=address,undefined','-I',str(GPU),str(src),str(obj),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True,timeout=10)

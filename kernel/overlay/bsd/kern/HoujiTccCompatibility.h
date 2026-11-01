@@ -72,8 +72,8 @@ houji_tcc_extension_snapshot(char *out, unsigned capacity)
 	if (!out || !capacity) return 0;
 	int n = snprintf(out, capacity,
 	    "HOUJI TCC MEDIA: unconfined-replies=%llu photos-replies=%llu; tccd MediaLibrary/Photos file / only, TCC authorization unchanged\n",
-	    __atomic_load_n(&houji_tcc_media_issued, __ATOMIC_RELAXED),
-	    __atomic_load_n(&houji_tcc_photos_issued, __ATOMIC_RELAXED));
+	    (unsigned long long)__atomic_load_n(&houji_tcc_media_issued, __ATOMIC_RELAXED),
+	    (unsigned long long)__atomic_load_n(&houji_tcc_photos_issued, __ATOMIC_RELAXED));
 	if (n <= 0 || (unsigned)n >= capacity) { out[0] = 0; return 0; }
 	return (unsigned)n;
 }

@@ -8,7 +8,9 @@ source=ROOT/'kernel/overlay/iokit/Kernel/houji-ufs-root/battery'
 with tempfile.TemporaryDirectory(prefix='houji-firmware-') as temporary:
     d=Path(temporary)
     for name,text in {
-        'IOKit/IOLib.h':'#include <stddef.h>\nvoid *IOMalloc(size_t);\nvoid IOFree(void *,size_t);\n',
+        # EFTYPE is part of the target Darwin ABI, absent from Linux errno.h.
+        # Define it only in this host fixture, never in the production driver.
+        'IOKit/IOLib.h':'#include <stddef.h>\n#include <errno.h>\n#ifndef EFTYPE\n#define EFTYPE 79\n#endif\nvoid *IOMalloc(size_t);\nvoid IOFree(void *,size_t);\n',
         'libkern/libkern.h':'#include <stdio.h>\n#include <string.h>\n#include <strings.h>\n',
     }.items():
         p=d/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(text)

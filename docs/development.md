@@ -129,7 +129,7 @@ Metal 前端与 Rust 对象桥接也必须一起构建：`NmbTextureDescriptor` 
 python3 tools/build-userland-compat.py --output out/userland-compat
 ```
 
-该入口构建并签名 `/usr/lib/HoujiKeyboardGeometry.dylib` 的本地候选，不修改镜像或设备。保留已使用的键盘几何逻辑。r238 的 Core Image 软件 context 尝试在实机无效，已撤下；构建不再含该 hook。目标用户空间导入、系统卷原文件所有者/权限及签名仍须分别校验。
+该入口构建并签名 `/usr/lib/HoujiKeyboardGeometry.dylib` 的本地候选，不修改镜像或设备。保留已使用的键盘几何逻辑，并包含[状态栏适配](display-geometry.md)。r238 的 Core Image 软件 context 尝试在实机无效，已撤下；构建不再含该 hook。目标用户空间导入、系统卷原文件所有者/权限及签名仍须分别校验。
 
 Metal 的七个异步函数/管线创建入口使用串行后台编译队列，提交前复制可变描述符，回调在独立队列执行；同步入口保持原行为。`ASYNC` 行记录各类请求、完成、回调和排队耗时。主机门控检查执行实际入口并验证返回时机、参数快照、生命周期、错误/反射传递及回调重入，不证明手机上已改善动画。
 

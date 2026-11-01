@@ -8,7 +8,7 @@ import tempfile
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-APPLE_CHECKS = ('gpu-stage-trace.py', 'gpu-cpu-profile.py', 'metal-surface-use.py', 'metal-async.py', 'metal-trace-id.py', 'metal-command-dictionary.py')
+APPLE_CHECKS = ('gpu-stage-trace.py', 'gpu-cpu-profile.py', 'metal-surface-use.py', 'metal-async.py', 'metal-trace-id.py', 'metal-command-dictionary.py', 'statusbar-geometry.py')
 CHECKS = (
     'cpu-lut.py',
     'gpu-input-prewarm.py',
@@ -47,6 +47,7 @@ CHECKS = (
     'gpu-stage-trace.py',
     'gpu-cpu-profile.py',
     'metal-device-answers.py',
+    'metal-device-limits.py',
     'metal-no-copy-pages.py',
     'metal-surface-use.py',
     'display-queue.py',
@@ -63,6 +64,7 @@ CHECKS = (
     'system-app-dyld.py',
     'tcc-media-compatibility.py',
     'metal-command-dictionary.py',
+    'statusbar-geometry.py',
 )
 
 

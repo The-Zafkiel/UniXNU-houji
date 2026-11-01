@@ -1497,6 +1497,27 @@ static bool pipelineArchives(NSArray *list,std::vector<NmbBinaryArchive *> &arch
 }
 
 #include "NativeLinearTextureLayout.h"
+#include "NativeDeviceLimits.h"
+
+static void initializeTextureLimits(id device) {
+ Class base=objc_getClass("_MTLDevice");
+ Ivar field=base?class_getInstanceVariable(base,"_limits"):nullptr;
+ const char *encoding=field?ivar_getTypeEncoding(field):nullptr;
+ NSUInteger size=0,alignment=0;
+ if(!encoding){NBLOG(@"native-metal: texture limits ABI unavailable");return;}
+ @try {NSGetSizeAndAlignment(encoding,&size,&alignment);}
+ @catch(NSException *exception){NBLOG(@"native-metal: texture limits ABI refused: %@",exception.name);return;}
+ const ptrdiff_t offset=ivar_getOffset(field);
+ const size_t instance=class_getInstanceSize(base);
+ uint64_t width=0,height=0;
+ if(offset<0 || size_t(offset)>instance || size>instance-size_t(offset) ||
+    !nmb_device_answer(gDevice,"maxTextureWidth2D",0,&width) ||
+    !nmb_device_answer(gDevice,"maxTextureHeight2D",0,&height) ||
+    !houji_device_limits::populate((uint8_t *)(__bridge void *)device+offset,size,encoding,width,height)) {
+  NBLOG(@"native-metal: texture limits initialization refused");return;
+ }
+ journal("L texture2d="+std::to_string(width)+"x"+std::to_string(height));
+}
 
 @interface NBDeviceMethods : NSObject
 @end
@@ -1518,9 +1539,10 @@ static bool pipelineArchives(NSArray *list,std::vector<NmbBinaryArchive *> &arch
 - (BOOL)supportsFeatureSet:(MTLFeatureSet)set {(void)set;return NO;}
 // The original discovery (_MTLAddDevice) runs these four on every device it registers. The target's own versions fill the base class's limits
 // and feature tables from a hardware profile (`featureProfile`, `indirectArgumentBufferCapabilities`, a table of Apple GPUs) that this device
-// has not got: running them would claim an Apple GPU's capabilities. They are empty here, so a limit or feature the runtime measured is answered
-// by this file's own answers (installAnswers) and any other stays the base class's neutral 0/NO. Nothing is claimed that nothing measured.
-- (void)initLimits {}
+// has not got. Scalar selectors are supplied by installAnswers. Photos also
+// reads the limits record directly, so publish its two texture dimensions from
+// those same runtime answers; leave unrelated profile fields unchanged.
+- (void)initLimits {initializeTextureLimits(self);}
 - (void)initFeatureQueries {}
 - (void)initGPUFamilySupport {}
 - (void)initWorkarounds {}

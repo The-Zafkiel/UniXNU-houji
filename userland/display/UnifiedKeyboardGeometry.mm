@@ -7,6 +7,8 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <cmath>
+#include <algorithm>
+#include <initializer_list>
 #include <cstdlib>
 #include <cstring>
 #include <cstdarg>
@@ -65,6 +67,8 @@ bool exactType(Method method, unsigned argument, const char *expected) {
     free(type);
     return same;
 }
+
+#include "HoujiStatusBarGeometry.h"
 
 CGSize adjusted(id receiver, SEL selector, NSInteger orientation, CGSize original) {
     // Restrict the correction to portrait on this board. All system APPL bundles share this library.
@@ -161,7 +165,10 @@ void install() {
 __attribute__((constructor)) void start() {
     const char *process = getprogname();
     if (!process) return;
-    @autoreleasepool { report(@"HOUJI KEYBOARD v18: loaded in %s pid=%d", process, getpid()); }
+    @autoreleasepool {
+        report(@"HOUJI KEYBOARD v18: loaded in %s pid=%d", process, getpid());
+        houji_status_bar::install();
+    }
     dispatch_async(dispatch_get_main_queue(), ^{ install(); });
 }
 }

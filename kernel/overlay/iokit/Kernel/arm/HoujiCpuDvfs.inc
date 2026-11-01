@@ -8,16 +8,33 @@
 extern "C" uint64_t houji_cpu_idle_mach(int);
 extern "C" uint64_t houji_gpu_submit_activity(void);
 static uint64_t houjiTouchTime;
+static uint64_t houjiTouchBurstTime;
 extern "C" void houji_dvfs_touch(void) {
- __atomic_store_n(&houjiTouchTime,mach_absolute_time(),__ATOMIC_RELAXED);
+ const uint64_t now=mach_absolute_time();
+ uint64_t previous=__atomic_load_n(&houjiTouchTime,__ATOMIC_RELAXED);
+ while(now>previous && !__atomic_compare_exchange_n(&houjiTouchTime,&previous,now,false,__ATOMIC_RELAXED,__ATOMIC_RELAXED)){}
+ if(now<=previous)return;
+ uint64_t gapNs=0;if(previous)absolutetime_to_nanoseconds(now-previous,&gapNs);
+ // Record the start of a contact burst at the input source, not at a slower
+ // governor poll. A held/moving finger must not renew the short idle prewarm.
+ if(!previous || gapNs>=80000000ULL){
+  uint64_t old=__atomic_load_n(&houjiTouchBurstTime,__ATOMIC_RELAXED);
+  while(now>old && !__atomic_compare_exchange_n(&houjiTouchBurstTime,&old,now,false,__ATOMIC_RELAXED,__ATOMIC_RELAXED)){}
+ }
 }
 extern "C" uint64_t houji_dvfs_touch_time(void) {
  return __atomic_load_n(&houjiTouchTime,__ATOMIC_RELAXED);
 }
+extern "C" uint64_t houji_dvfs_touch_burst_time(void) {
+ return __atomic_load_n(&houjiTouchBurstTime,__ATOMIC_RELAXED);
+}
 namespace HoujiCpuDvfs {
 constexpr unsigned domains=4,rows=40;
 constexpr unsigned cpuDomain[8]={0,0,3,3,3,1,1,2},counts[4]={2,2,1,3};
-constexpr uint32_t caps[4]={2265600,2956800,3052800,3148800};
+// Recovery exposes X4's top four EPSS rows in scaling_boost_frequencies,
+// separately from scaling_available_frequencies. boost=1 and cpuinfo_max_freq
+// confirm 3302400 kHz; no frequency or voltage is synthesized here.
+constexpr uint32_t caps[4]={2265600,2956800,3302400,3148800};
 constexpr uint32_t minima[4]={364800,499200,480000,499200};
 struct Domain {
  IOMemoryMap *map;uintptr_t va;uint32_t khz[rows];uint8_t index[rows];
@@ -32,6 +49,11 @@ struct History {
 };
 static History history[48];
 static unsigned historyCount;
+// Keep the latest complete interval separately from the bounded boot history.
+// Late interaction/thermal samples must survive message-ring wrap and the
+// first 240 seconds. One writer publishes atomically; snapshots never read HW.
+struct LatestWindow {uint32_t sequence;uint64_t values[33];};
+static LatestWindow latest;
 static uint32_t read(Domain&w,unsigned off){return *(volatile uint32_t*)(w.va+off);}
 static bool init(unsigned id){
  auto&w=d[id];auto*m=IODeviceMemory::withRange(0x17d91000ULL+id*0x1000,0x1000);
@@ -66,7 +88,7 @@ static void worker(void*,wait_result_t){
  uint64_t last=mach_absolute_time(),idle[8]={},report=last,boost=0,frameTicks=0,frameUntil=0;
  uint64_t submits=houji_gpu_submit_activity(),sumUs=0,boostUs=0,frameUs=0,maxTickUs=0;
  uint64_t coreUs[8]={},requestUs[4]={};
- unsigned recent=0,quiet[4]={},stateMin[4]={UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX},stateMax[4]={},throttled[4]={},changes[4]={};
+ unsigned recent=0,sequence=0,quiet[4]={},stateMin[4]={UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX},stateMax[4]={},throttled[4]={},changes[4]={};
  nanoseconds_to_absolutetime(1000000000,&boost);
  nanoseconds_to_absolutetime(300000000,&frameTicks);
  for(unsigned c=0;c<8;c++)idle[c]=houji_cpu_idle_mach(c);
@@ -94,11 +116,27 @@ static void worker(void*,wait_result_t){
    if(w.load>=500 && state && uint64_t(state)*5<uint64_t(w.khz[w.cur])*4)++throttled[id];
    unsigned floor=houjiDvfsInteractiveFloor(w.khz,w.n,w.load,id!=0,boosted,framing,&quiet[id]);
    unsigned at=houjiDvfsChoose(w.khz,w.n,w.cur,w.load,floor,&w.low);
+   unsigned thermal=houji_thermal_cpu_cap(id);if(!thermal)thermal=1;
+   if(at>=thermal){at=thermal-1;w.low=0;}
    if(at!=w.cur && !vote(id,at)){w.bad=1;IOLog("HOUJI CPU DVFS FAIL: domain=%u request/readback mismatch; domain writes disabled\n",id);}
    w.readback=read(w,0x320);w.state=read(w,0x20);
   }
   uint64_t ns=0;absolutetime_to_nanoseconds(now-report,&ns);
   if(ns>=5000000000ULL){report=now;
+   if(sumUs){
+    uint64_t upNs=0;absolutetime_to_nanoseconds(now,&upNs);
+    uint64_t values[33]={upNs/1000000,sumUs,boostUs,frameUs,maxTickUs};
+    for(unsigned c=0;c<8;c++)values[5+c]=coreUs[c]/sumUs;
+    for(unsigned id=0;id<domains;id++){
+     values[13+id]=requestUs[id]/sumUs;values[17+id]=stateMin[id];values[21+id]=stateMax[id];
+     values[25+id]=throttled[id];values[29+id]=d[id].changes-changes[id];
+    }
+    __atomic_store_n(&latest.sequence,0u,__ATOMIC_RELEASE);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    for(unsigned i=0;i<33;i++)__atomic_store_n(&latest.values[i],values[i],__ATOMIC_RELAXED);
+    if(!++sequence)++sequence;
+    __atomic_store_n(&latest.sequence,sequence,__ATOMIC_RELEASE);
+   }
    unsigned count=__atomic_load_n(&historyCount,__ATOMIC_RELAXED);
    if(count<48 && sumUs){auto&h=history[count];uint64_t upNs=0;absolutetime_to_nanoseconds(now,&upNs);
     h.upMs=upNs/1000000;h.us=sumUs;h.boostUs=boostUs;h.frameUs=frameUs;h.maxTickUs=maxTickUs;
@@ -116,9 +154,32 @@ static void start(){
  if(started)return;started=true;PE_parse_boot_argn("houji_dvfs",&enabled,sizeof(enabled));
  if(!(enabled&1))return;
  for(unsigned id=0;id<domains;id++)if(!init(id)){IOLog("HOUJI CPU DVFS: domain=%u factory validation refused; no frequency writes\n",id);return;}
- for(unsigned id=0;id<domains;id++)if(!vote(id,d[id].cur)){IOLog("HOUJI CPU DVFS: initial readback refused domain=%u\n",id);return;}
+ for(unsigned id=0;id<domains;id++)houji_thermal_cpu_levels(id,d[id].n);
+ houji_thermal_start();
+ for(unsigned id=0;id<domains;id++)if(!vote(id,0)){IOLog("HOUJI CPU DVFS: initial readback refused domain=%u\n",id);return;}
  thread_t t;if(kernel_thread_start(worker,nullptr,&t)==KERN_SUCCESS)thread_deallocate(t);
 }
+}
+extern "C" unsigned houji_cpu_dvfs_snapshot(char *out,unsigned capacity){
+ if(!out || !capacity)return 0;out[0]=0;unsigned used=0;
+ auto append=[&](const char *format,auto... args){
+  if(used>=capacity-1)return;
+  int n=snprintf(out+used,capacity-used,format,args...);
+  if(n>0 && (unsigned)n<capacity-used)used+=(unsigned)n;
+  else out[used]=0; // never leave a partial diagnostic row
+ };
+ auto &s=HoujiCpuDvfs::latest;uint64_t v[33];
+ uint32_t sequence=__atomic_load_n(&s.sequence,__ATOMIC_ACQUIRE);
+ if(!sequence){append("%s","HOUJI CPU SNAPSHOT: pending\n");return used;}
+ for(unsigned i=0;i<33;i++)v[i]=__atomic_load_n(&s.values[i],__ATOMIC_RELAXED);
+ __atomic_thread_fence(__ATOMIC_ACQUIRE);
+ if(sequence!=__atomic_load_n(&s.sequence,__ATOMIC_ACQUIRE)){
+  append("%s","HOUJI CPU SNAPSHOT: raced; interval omitted\n");return used;
+ }
+ append("HOUJI CPU SNAPSHOT: n=%u up-ms=%llu span-us=%llu touch-us=%llu frame-us=%llu max-tick-us=%llu; last complete interval, not power measurement\n",sequence,v[0],v[1],v[2],v[3],v[4]);
+ append("HOUJI CPU LOAD: core-permille=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",v[5],v[6],v[7],v[8],v[9],v[10],v[11],v[12]);
+ for(unsigned id=0;id<4;id++)append("HOUJI CPU DOMAIN: id=%u mean-request-kHz=%llu state-min=%llu state-max=%llu throttle-samples=%llu changes=%llu\n",id,v[13+id],v[17+id],v[21+id],v[25+id],v[29+id]);
+ return used;
 }
 extern "C" void houji_cpu_dvfs_history_report(void){
  using namespace HoujiCpuDvfs;

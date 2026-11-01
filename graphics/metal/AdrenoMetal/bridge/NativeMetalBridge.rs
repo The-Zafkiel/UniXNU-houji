@@ -24,6 +24,14 @@ use std::time::Duration;
 /// The runtime's own example library (validation/fixtures/public/examples/runtime_examples.ll), assembled to AIR at build time.
 static FIXTURE_AIR: &[u8] = include_bytes!(env!("NMB_FIXTURE_AIR"));
 
+/// The reviewed runtime identity used by the primer's completion records.
+/// The builder validates it against the Rust sources. Shader artifact keys
+/// independently include the translator's SOURCE_DIGEST and format versions.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_runtime_build() -> *const c_char {
+    concat!(env!("NMB_RUNTIME_ID"), "\0").as_ptr().cast()
+}
+
 unsafe extern "C" {
     /// libkern (libSystem): clean and invalidate the data cache over a range, from user space.
     fn sys_dcache_flush(start: *mut c_void, len: usize);

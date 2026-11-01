@@ -24,6 +24,7 @@
 #![warn(missing_docs)]
 
 mod address;
+pub mod stage_trace;
 mod address_map;
 mod address_pool;
 mod amplification;
@@ -119,8 +120,10 @@ mod gpu_time;
 mod heap;
 mod heap_sets;
 mod host_aliases;
+mod host_backing;
 mod host_bytes;
 mod host_memory;
+mod host_ram;
 #[cfg(unix)]
 mod host_residency;
 #[cfg(unix)]
@@ -210,6 +213,12 @@ mod stencil_copy;
 mod storage_placeholder;
 mod tessellation;
 mod texture;
+/// Diagnostic initial-pattern marker: enabled flag and planned texture count.
+/// Counts are cached and do not read or synchronize with the GPU.
+#[doc(hidden)]
+pub fn houji_pattern_probe_statistics() -> [u64; 2] {
+    texture::houji_pattern_probe_statistics()
+}
 mod texture_descriptor;
 mod tile_pass;
 mod tracker;
@@ -222,6 +231,7 @@ mod values;
 mod versioned;
 mod view_plan;
 mod visibility;
+mod warm;
 mod word_fill;
 mod work_counts;
 mod wrapped_buffer;
@@ -293,8 +303,10 @@ pub use function_table::{
 };
 pub use gpu_time::host_time;
 pub use heap::{Heap, HeapDescriptor, HeapProblem, HeapType, SizeAndAlign};
+pub use host_backing::HostBacking;
 pub use host_bytes::HostBytes;
-pub use host_memory::{Deallocator, HostMemory, ImportGate, ImportRequest, KeepAlive};
+pub use host_memory::{Deallocator, HostMemory, ImportGate, ImportRequest, KeepAlive, RunResolver};
+pub use host_ram::{HostRam, HostRamUse};
 pub use indirect_command_buffer::{
     EncodedComputeCommand, EncodedRenderCommand, IndirectBufferBinding, IndirectCommand,
     IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandBufferProblem,
@@ -323,7 +335,7 @@ pub use rate_map::{RasterizationRateMap, RateMapProblem};
 pub use rate_mapped_pass::RegionRefusal;
 pub use rebind::RebindProblem;
 #[doc(hidden)]
-pub use recorder::CommandsReplayed;
+pub use recorder::CommandsRecorded;
 pub use render::{DrawProblem, RenderCommandEncoder, ResolveTarget};
 pub use render_pass::{
     Attachment, RenderPassColorAttachmentDescriptor, RenderPassDepthAttachmentDescriptor,
@@ -354,6 +366,7 @@ pub use values::{
 };
 pub use view_plan::ViewProblem;
 pub use visibility::{VisibilityProblem, VisibilityResultMode};
+pub use warm::{PipelineRecord, WarmStatistics};
 pub use work_counts::{CopySite, MemoryFrees, WorkCounts};
 pub use wrapped_buffer::{VkBufferMemory, WrappedBufferProblem};
 pub use ycbcr::{IoSurfaceYCbCr, SurfaceYCbCrMatrix};

@@ -17,8 +17,8 @@ STUBS = r'''
 #include <pthread.h>
 using VkResult=int;
 constexpr int VK_SUCCESS=0, DARWIN_RETIRED_BOS=8;
-struct tu_bo {unsigned gem_handle;int refcnt;void *map;unsigned darwin_token,darwin_handle;unsigned long long iova,size;};
-struct Entry {unsigned handle;unsigned long long iova,size;void *map;unsigned token,fence;};
+struct tu_bo {unsigned gem_handle;int refcnt;void *map;unsigned darwin_token,darwin_handle;unsigned long long iova,size,darwin_alloc_size;bool darwin_cacheable,darwin_read_only;};
+struct Entry {unsigned handle;unsigned long long iova,size;void *map;unsigned token,fence;bool cacheable,read_only;};
 struct darwin_retire_state {pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;unsigned count=0,head=0,pressure_waits=0,enqueued=0;int failure=0;Entry entries[8]{};};
 struct tu_device {int dma_bo_lock,vk;void *darwin_retire;};
 struct {pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;unsigned last_fence=1;} dw;

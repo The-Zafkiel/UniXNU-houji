@@ -473,7 +473,7 @@ diff --git a/src/freedreno/vulkan/tu_knl.h b/src/freedreno/vulkan/tu_knl.h
 index 4c2bf6a..a8ccd76 100644
 --- a/src/freedreno/vulkan/tu_knl.h
 +++ b/src/freedreno/vulkan/tu_knl.h
-@@ -58,6 +58,13 @@ struct tu_bo {
+@@ -58,6 +58,17 @@ struct tu_bo {
     int shared_fd;
  #endif
  
@@ -482,12 +482,16 @@ index 4c2bf6a..a8ccd76 100644
 +    * CPU mapping (IOConnectMapMemory64 memory type). */
 +   uint64_t darwin_handle;
 +   uint32_t darwin_token;
++   /* Retained allocation extent, distinct from the caller's logical size. */
++   uint64_t darwin_alloc_size;
++   bool darwin_cacheable;
++   bool darwin_read_only;
 +#endif
 +
     bool implicit_sync : 1;
     bool never_unmap : 1;
     bool cached_non_coherent : 1;
-@@ -140,6 +147,9 @@ struct tu_knl {
+@@ -140,6 +151,9 @@ struct tu_knl {
                         const char *name);
     VkResult (*bo_init_dmabuf)(struct tu_device *dev, struct tu_bo **out_bo,
                                uint64_t size, enum tu_bo_alloc_flags flags, int prime_fd);
@@ -497,7 +501,7 @@ index 4c2bf6a..a8ccd76 100644
     int (*bo_export_dmabuf)(struct tu_device *dev, struct tu_bo *bo);
     VkResult (*bo_alloc_lazy)(struct tu_device *dev, struct tu_bo *bo);
     VkResult (*bo_map)(struct tu_device *dev, struct tu_bo *bo, void *placed_addr);
-@@ -221,6 +231,9 @@ tu_bo_init_dmabuf(struct tu_device *dev,
+@@ -221,6 +235,9 @@ tu_bo_init_dmabuf(struct tu_device *dev,
  int
  tu_bo_export_dmabuf(struct tu_device *dev, struct tu_bo *bo);
  

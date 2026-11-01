@@ -1845,10 +1845,31 @@ index d74c063..c64e952 100644
  #if defined(__i386__) || defined(__x86_64__)
  	IOService::waitForService(
 diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
-index 2613ab5..163fce1 100644
 --- a/iokit/Kernel/IOUserClient.cpp
 +++ b/iokit/Kernel/IOUserClient.cpp
-@@ -2599,7 +2599,62 @@ is_io_service_match_property_table_bin(
+@@ -2431,6 +2431,11 @@
+ 	return ret;
+ }
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++extern "C" bool houji_backlight_conforms(const OSObject *,const char *);
++extern "C" bool houji_backlight_allows_properties(IORegistryEntry *,OSObject *);
++#endif
++
+ /* Routine io_object_conforms_to */
+ kern_return_t
+ is_io_object_conforms_to(
+@@ -2443,6 +2448,9 @@
+ 	}
+ 
+ 	*conforms = (NULL != object->metaCast( className ));
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	if (!*conforms) *conforms = houji_backlight_conforms(object,className);
++#endif
+ 
+ 	return kIOReturnSuccess;
+ }
+@@ -2599,7 +2607,62 @@
  	return internal_io_service_match_property_table(service, matching, matchingCnt, matches);
  }
  
@@ -1912,7 +1933,7 @@ index 2613ab5..163fce1 100644
  internal_io_service_get_matching_services(
  	mach_port_t main_port,
  	const char * matching,
-@@ -2619,7 +2674,23 @@ internal_io_service_get_matching_services(
+@@ -2619,7 +2682,23 @@
  
  	if ((dict = OSDynamicCast( OSDictionary, obj))) {
  		IOTaskRegistryCompatibilityMatching(current_task(), dict);
@@ -1937,7 +1958,7 @@ index 2613ab5..163fce1 100644
  		kr = kIOReturnSuccess;
  	} else {
  		kr = kIOReturnBadArgument;
-@@ -2704,6 +2775,13 @@ internal_io_service_get_matching_service(
+@@ -2704,6 +2783,13 @@
  		IOTaskRegistryCompatibilityMatching(current_task(), dict);
  		*service = IOService::copyMatchingService( dict );
  		kr = *service ? kIOReturnSuccess : kIOReturnNotFound;
@@ -1951,7 +1972,7 @@ index 2613ab5..163fce1 100644
  	} else {
  		kr = kIOReturnBadArgument;
  	}
-@@ -2807,6 +2885,14 @@ internal_io_service_add_notification(
+@@ -2807,6 +2893,14 @@
  			continue;
  		}
  		IOTaskRegistryCompatibilityMatching(current_task(), dict);
@@ -1966,7 +1987,7 @@ index 2613ab5..163fce1 100644
  
  		if ((sym == gIOPublishNotification)
  		    || (sym == gIOFirstPublishNotification)) {
-@@ -3274,6 +3360,15 @@ is_io_registry_entry_from_path(
+@@ -3274,6 +3368,15 @@
  	}
  
  	entry = IORegistryEntry::fromPath( path );
@@ -1982,7 +2003,20 @@ index 2613ab5..163fce1 100644
  
  	if (!entry && IOTaskRegistryCompatibility(current_task())) {
  		OSDictionary * matching;
-@@ -4083,6 +4178,14 @@ is_io_registry_entry_get_child_iterator(
+@@ -3994,7 +4097,11 @@
+ 		}
+ #if CONFIG_MACF
+ 		else if (0 != mac_iokit_check_set_properties(kauth_cred_get(),
+-		    registry_entry, obj)) {
++		    registry_entry, obj)
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		    && !houji_backlight_allows_properties(entry,obj)
++#endif
++		    ) {
+ 			res = kIOReturnNotPermitted;
+ 		}
+ #endif
+@@ -4083,6 +4190,14 @@
  
  	*iterator = IOUserIterator::withIterator(entry->getChildIterator(
  		    IORegistryEntry::getPlane( plane )));
@@ -1997,7 +2031,7 @@ index 2613ab5..163fce1 100644
  
  	return kIOReturnSuccess;
  }
-@@ -4298,6 +4401,15 @@ is_io_service_open_extended(
+@@ -4298,6 +4413,15 @@
  #endif
  		res = service->newUserClient( owningTask, (void *) owningTask,
  		    connect_type, propertiesDict, &client );
@@ -2017,11 +2051,16 @@ diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
 index 2b14eda..d0e79a1 100644
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -34,6 +34,50 @@
+@@ -34,6 +34,55 @@
  
  const char * gIOKernelConfigTables =
      "("
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
++    "   {"
++    "     'IOClass'         = IONetworkStack;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = IONetworkStack;"
++    "   },"
 +    "   {"
 +    "     'IOClass'         = SweetPlatformExpert;"
 +    "     'IOProviderClass' = IOPlatformExpertDevice;"
@@ -2126,10 +2165,9 @@ index 5fb0a52..68a64fa 100644
 +iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoPublish.cpp optional iokitcpp
 +iokit/Kernel/houji-ufs-root/Adreno740/HoujiNativeAccelerator.cpp optional iokitcpp
 diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
-index f731d43..da6c812 100644
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
-@@ -5,3 +5,17 @@ iokit/Kernel/IOPMrootDomain.cpp    					optional iokitcpp
+@@ -5,3 +5,32 @@
  
  # SMP
  iokit/Kernel/arm/AppleARMSMP.cpp    					optional iokitcpp
@@ -2143,6 +2181,21 @@ index f731d43..da6c812 100644
 +iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitcpp
 +iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
 +iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
++iokit/Kernel/arm/HoujiNetworkStack.cpp                           optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/QcomSmem.c                   optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomSmp2p.c                  optional iokit
++iokit/Kernel/houji-ufs-root/battery/FatVolume.c                  optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomMdt.c                    optional iokit
++iokit/Kernel/houji-ufs-root/battery/HoujiFirmware.cpp            optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/HoujiAdsp.cpp            optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/HoujiAdspTransport.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/HoujiBattery.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/HoujiQrtr.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/HoujiBattmgr.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomGlink.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomQmp.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomQrtr.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomRpmh.c            optional iokit
 +iokit/Kernel/arm/hid/SweetHID.cpp                                optional iokitcpp
 +iokit/Kernel/arm/hid/IOHIDEvent.cpp                              optional iokitcpp
 +iokit/Kernel/arm/hid/IOHIDEventServiceQueue.cpp                  optional iokitcpp
@@ -3135,7 +3188,6 @@ index 133b07f..e01c124 100644
  
  /* I-Cache. */
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index c40c6ea..2b01a76 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
 @@ -32,6 +32,7 @@
@@ -3146,7 +3198,7 @@ index c40c6ea..2b01a76 100644
  #include <arm/trap.h> /* for IS_ARM_GDB_TRAP() et al */
  #include <arm64/proc_reg.h>
  #include <arm64/machine_machdep.h>
-@@ -1855,6 +1856,50 @@ sleh_irq(arm_saved_state_t *state)
+@@ -1855,6 +1856,51 @@
  #endif
  
  
@@ -3184,7 +3236,8 @@ index c40c6ea..2b01a76 100644
 +		cpu_signal_handler();
 +	} else {
 +		sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_OTHER);
-+		if (cdp->interrupt_handler) {
++		extern int houji_spi_dispatch(uint32_t);
++		if (!houji_spi_dispatch(intid) && cdp->interrupt_handler) {
 +			cdp->interrupt_handler(cdp->interrupt_target,
 +			    cdp->interrupt_refCon,
 +			    cdp->interrupt_nub,
@@ -3197,7 +3250,7 @@ index c40c6ea..2b01a76 100644
  	sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_OTHER);
  
  #if USE_APPLEARMSMP
-@@ -1866,6 +1911,7 @@ sleh_irq(arm_saved_state_t *state)
+@@ -1866,6 +1912,7 @@
  	    cdp->interrupt_nub,
  	    cdp->interrupt_source);
  #endif
@@ -3448,7 +3501,7 @@ diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
 index 809dafa..a919f3f 100644
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -820,6 +820,225 @@ exception_triage(
+@@ -820,6 +820,234 @@ exception_triage(
  	return exception_triage_thread(exception, code, codeCnt, thread);
  }
  
@@ -3608,6 +3661,7 @@ index 809dafa..a919f3f 100644
 + * pointer backtrace of every thread of a task, from the saved user state.
 + */
 +void sweet_sample_task(const char *name, int pid, task_t task);
++extern void houji_sample_record(const char *text, unsigned bytes);
 +
 +void
 +sweet_sample_task(const char *name, int pid, task_t task)
@@ -3649,7 +3703,10 @@ index 809dafa..a919f3f 100644
 +		};
 +	}
 +	task_unlock(task);
-+	printf("SMP %s[%d] slide 0x%llx mh 0x%llx\n", name, pid, slide, mh);
++	char header[160];
++	int header_bytes = snprintf(header, sizeof(header), "SMP %s[%d] slide 0x%llx mh 0x%llx\n", name, pid, slide, mh);
++	printf("%s", header);
++	if (header_bytes > 0 && (unsigned)header_bytes < sizeof(header)) houji_sample_record(header, (unsigned)header_bytes);
 +	for (unsigned tn = 0; tn < count; tn++) {
 +		char line[400];
 +		uint64_t fp = regs[tn].fp;
@@ -3662,9 +3719,14 @@ index 809dafa..a919f3f 100644
 +			if (frame[0] <= fp) break;
 +			fp = frame[0];
 +		}
-+		printf("%s\n", line);
++		unsigned bytes = (unsigned)strlen(line);
++		if (bytes + 1 < sizeof(line)) { line[bytes++] = '\n'; line[bytes] = 0; }
++		printf("%s", line);
++		houji_sample_record(line, bytes);
 +	}
-+	printf("SMP END %s[%d] threads=%u truncated=%u\n", name, pid, count, truncated);
++	header_bytes = snprintf(header, sizeof(header), "SMP END %s[%d] threads=%u truncated=%u\n", name, pid, count, truncated);
++	printf("%s", header);
++	if (header_bytes > 0 && (unsigned)header_bytes < sizeof(header)) houji_sample_record(header, (unsigned)header_bytes);
 +	vm_map_deallocate(map);
 +	kfree_data(regs, sizeof(*regs) * MAX_SAMPLE_THREADS);
 +}
@@ -4182,7 +4244,6 @@ index 2927d4b..54edb01 100644
  
  	return kmem_get_nth_free_slot(meta, slot_idx, bitmap);
 diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
-index 3ad743f..5d5ca9f 100644
 --- a/pexpert/arm/pe_fiq.c
 +++ b/pexpert/arm/pe_fiq.c
 @@ -3,6 +3,7 @@
@@ -4209,7 +4270,7 @@ index 3ad743f..5d5ca9f 100644
  
  static uint32_t
  _gic_read32(vm_offset_t addr)
-@@ -50,7 +57,7 @@ find_gicr_pe_base()
+@@ -50,7 +57,7 @@
  	// We only care about aff1 and aff0
  	uint32_t phys_id = __builtin_arm_rsr64("MPIDR_EL1") & (MPIDR_AFF1_MASK | MPIDR_AFF0_MASK);
  
@@ -4218,16 +4279,19 @@ index 3ad743f..5d5ca9f 100644
  		vm_offset_t gicr_pe_base = gicr_base + offset;
  		uint64_t gicr_typer = gicr_read64(GICR_TYPER);
  		uint32_t aff_value = (uint32_t) (gicr_typer >> GICR_TYPER_AFFINITY_VALUE_SHIFT) & (MPIDR_AFF1_MASK | MPIDR_AFF0_MASK);
-@@ -67,6 +74,8 @@ find_gicr_pe_base()
+@@ -66,6 +73,11 @@
+ 
  	panic("%s: cannot find GICR base for core %u", __func__, ml_get_cpu_number(phys_id));
  }
- 
-+#include "HoujiSmpGic.inc"
 +
++#include "HoujiSmpGic.inc"
++#if defined(SWEET)
++#include "HoujiSpi.inc"
++#endif
+ 
  void
  pe_init_fiq()
- {
-@@ -96,6 +105,32 @@ pe_init_fiq()
+@@ -96,6 +108,32 @@
  			panic("%s: incorrect reg property size in GIC DT node; expecting 32 bytes but got %u bytes", __func__, prop_size);
  		}
  
@@ -4260,7 +4324,7 @@ index 3ad743f..5d5ca9f 100644
  		vm_offset_t soc_base_phys = pe_arm_get_soc_base_phys();
  
  		uint64_t const gicd_base_prop = ((uint64_t const *) prop)[0];
-@@ -141,11 +176,25 @@ pe_init_fiq()
+@@ -141,11 +179,25 @@
  		}
  	}
  
@@ -4286,7 +4350,7 @@ index 3ad743f..5d5ca9f 100644
  
  	// Enable system register access
  	uint64_t icc_sre = __builtin_arm_rsr64("ICC_SRE_EL1");
-@@ -153,8 +202,12 @@ pe_init_fiq()
+@@ -153,8 +205,12 @@
  	__builtin_arm_wsr64("ICC_SRE_EL1", icc_sre);
  	__builtin_arm_isb(ISB_SY);
  
@@ -4299,7 +4363,7 @@ index 3ad743f..5d5ca9f 100644
  	__builtin_arm_wsr64("ICC_PMR_EL1", 0xFF);
  
  	// Set EOI mode of this processor
-@@ -162,12 +215,24 @@ pe_init_fiq()
+@@ -162,12 +218,25 @@
  	icc_ctlr &= ~ICC_CTLR_EOIMODE;
  	__builtin_arm_wsr64("ICC_CTLR_EL1", icc_ctlr);
  
@@ -4313,6 +4377,7 @@ index 3ad743f..5d5ca9f 100644
 +	}
 +	__builtin_arm_wsr64("ICC_IGRPEN1_EL1", 1);
 +	__builtin_arm_isb(ISB_SY);
++	houji_spi_controller_ready();
 +#else
  	// Enable the forwarding of the vtimer interrupt
  	uint32_t gicd_ctlr = gicd_read32(GICD_CTLR);
@@ -4650,9 +4715,13 @@ index 97028c0..ae73f62 100644
  	int error;
  
 diff --git a/tools/lldbmacros/core/syntax_checker.py b/tools/lldbmacros/core/syntax_checker.py
-index 3ebc295..174ffef 100755
+index 3ebc295..994c190 100755
 --- a/tools/lldbmacros/core/syntax_checker.py
 +++ b/tools/lldbmacros/core/syntax_checker.py
+@@ -1,2 +1,2 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ from __future__ import absolute_import, print_function
 @@ -12,9 +12,6 @@ Usage:
  """
  import sys

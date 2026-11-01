@@ -5,15 +5,16 @@
 //! string, and no call unwinds into C.
 
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan_runtime::{MultisampleDepthResolveFilter, MultisampleStencilResolveFilter};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::{
     BarrierScope, BlendFactor, BlendOperation, ColorWriteMask, CompareFunction, CullMode, DataType, IndexType, PixelFormat, PrimitiveTopologyClass, ResourceUsage,
     PrimitiveType, RenderStages, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter, StencilOperation, TextureType,
-    TextureUsage, TriangleFillMode, VertexFormat, VertexStepFunction, Winding,
+    TextureUsage, TextureSwizzle, TextureSwizzleChannels, TriangleFillMode, VertexFormat, VertexStepFunction, Winding,
 };
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, LinkedFunction, LinkedFunctions, RenderPipelineDescriptor, StageSource, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
     VertexDescriptor,
 };
 use metal2vulkan_runtime::{
@@ -29,6 +30,9 @@ use std::ptr::NonNull;
 use std::time::Duration;
 #[path = "TimingObservations.rs"]
 mod timing_observations;
+#[path = "NativeMetalPages.rs"]
+mod no_copy_pages;
+use no_copy_pages::{NoCopyPages, pages_identity};
 
 thread_local! {
     static LAST: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -142,7 +146,7 @@ pub unsafe extern "C" fn nmb_function_constant_air(length: *mut usize) -> *const
 
 // ---- device ----
 
-pub struct NmbDevice(Device, std::sync::OnceLock<PrivateProperties>, std::sync::Mutex<()>);
+pub struct NmbDevice(Device, std::sync::OnceLock<PrivateProperties>, std::sync::Mutex<NoCopyPages>);
 
 impl NmbDevice {
     /// The runtime judges the private properties by the family rows once.
@@ -165,7 +169,7 @@ pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_
         options.loader = Some(PathBuf::from(loader.to_string_lossy().into_owned()));
         options.shader_cache = metal2vulkan_runtime::ShaderCacheOptions::in_directory(cache.to_string_lossy().into_owned());
         options.messages = Some(MessageSink::new(observe_message));
-        Ok(boxed(NmbDevice(Device::system_default_with(&options).map_err(e("device"))?, std::sync::OnceLock::new(), std::sync::Mutex::new(()))))
+        Ok(boxed(NmbDevice(Device::system_default_with(&options).map_err(e("device"))?, std::sync::OnceLock::new(), std::sync::Mutex::new(NoCopyPages::default()))))
     })
 }
 
@@ -240,6 +244,15 @@ pub extern "C" fn nmb_thread_qos_stats(out: *mut u64) {
     unsafe { std::ptr::copy_nonoverlapping(counts.as_ptr(), out, counts.len()); }
 }
 
+/// Diagnostic-only pattern marker statistics; reads cached host counters.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_pattern_probe_stats(out: *mut u64) {
+    if out.is_null() { return; }
+    let counts = metal2vulkan_runtime::houji_pattern_probe_statistics();
+    // SAFETY: the C header requires two writable words.
+    unsafe { std::ptr::copy_nonoverlapping(counts.as_ptr(), out, counts.len()); }
+}
+
 /// Separate artifact and driver-record counters, mirroring the C ABI.
 #[repr(C)]
 pub struct NmbShaderCacheStats {
@@ -297,6 +310,12 @@ pub extern "C" fn nmb_device_max_buffer_length(device: *const NmbDevice) -> u64 
 }
 
 /// `maxThreadsPerThreadgroup` into the caller's three words.
+// AdrenoMetal e0997b08: pressure releases only unused runtime storage.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_device_release_kept_memory(device: *const NmbDevice) -> usize {
+    guard(0, || Ok(get(device)?.0.release_kept_memory()))
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_device_max_threads_per_threadgroup(device: *const NmbDevice, out: *mut u64) -> bool {
     guard(false, || {
@@ -577,12 +596,29 @@ pub unsafe extern "C" fn nmb_buffer_new_no_copy_releasing(device: *mut NmbDevice
     unsafe { no_copy(device, pointer, length, options_word, deallocator) }
 }
 
+static NO_COPY_REMAPS: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// # Safety
+/// `out` points to six writable words: checked, remapped, identity queries,
+/// unknown queries, total query microseconds and maximum query microseconds.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_no_copy_remaps(out: *mut u64) -> bool {
+    if out.is_null() { return false; }
+    // SAFETY: the C ABI's six-word output contract.
+    let words = unsafe { std::slice::from_raw_parts_mut(out, 6) };
+    words[0] = NO_COPY_REMAPS[0].load(std::sync::atomic::Ordering::Relaxed);
+    words[1] = NO_COPY_REMAPS[1].load(std::sync::atomic::Ordering::Relaxed);
+    words[2..].copy_from_slice(&no_copy_pages::query_stats());
+    true
+}
+
 unsafe fn no_copy(device: *mut NmbDevice, pointer: *mut c_void, length: u64, options_word: u64, deallocator: Option<Deallocator>)
                   -> *mut NmbBuffer {
     guard(std::ptr::null_mut(), || {
         let device = get(device)?;
         // SAFETY: the caller's contract.
-        let memory = unsafe { HostMemory::new(NonNull::new(pointer as *mut u8).ok_or("null memory")?) };
+        let base = NonNull::new(pointer as *mut u8).ok_or("null memory")?;
+        let memory = unsafe { HostMemory::new(base) };
         let modes = options(options_word)?;
         // The runtime's live-import lookup and subsequent join are separate:
         // simultaneous first constructors can allocate distinct imports of the
@@ -593,9 +629,19 @@ unsafe fn no_copy(device: *mut NmbDevice, pointer: *mut c_void, length: u64, opt
         // returning/formatting a failure; GPU work and resource release never
         // take it. A device's unrelated APIs and other devices remain separate.
         let buffer = {
-            let _gate = device.2.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut gate = device.2.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let range = (pointer as u64, length);
+            NO_COPY_REMAPS[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if gate.needs_remap(range, pages_identity(range.0, range.1)) {
+                // End reuse of the earlier pages before creating this buffer.
+                // Existing owners keep their pinned imports until GPU completion.
+                device.0.host_range_remapped(base, length);
+                NO_COPY_REMAPS[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             // SAFETY: as above.
-            unsafe { device.0.new_buffer_with_bytes_no_copy(memory, length, modes, deallocator) }
+            let buffer = unsafe { device.0.new_buffer_with_bytes_no_copy(memory, length, modes, deallocator) };
+            gate.record(range, if buffer.is_ok() { pages_identity(range.0, range.1) } else { None });
+            buffer
         };
         Ok(boxed(NmbBuffer(buffer.map_err(e("no-copy buffer"))?)))
     })
@@ -708,9 +754,24 @@ pub struct NmbTextureDescriptor {
     pub array_length: u64,
     pub usage: u64,
     pub options: u64,
+    pub allow_gpu_optimized_contents: u64,
+    pub swizzle: [u64; 4],
+    pub rotation: u64,
+    pub framebuffer_only: u64,
+    pub is_drawable: u64,
 }
+const _: () = assert!(std::mem::size_of::<NmbTextureDescriptor>() == 144);
 
 pub struct NmbTexture(Texture);
+
+fn texture_swizzle(values: &[u64; 4]) -> Result<TextureSwizzleChannels, String> {
+    Ok(TextureSwizzleChannels {
+        red: raw::<TextureSwizzle>(values[0], "red texture swizzle")?,
+        green: raw::<TextureSwizzle>(values[1], "green texture swizzle")?,
+        blue: raw::<TextureSwizzle>(values[2], "blue texture swizzle")?,
+        alpha: raw::<TextureSwizzle>(values[3], "alpha texture swizzle")?,
+    })
+}
 
 fn texture_descriptor(d: *const NmbTextureDescriptor) -> Result<TextureDescriptor, String> {
     let d = get(d)?;
@@ -725,6 +786,15 @@ fn texture_descriptor(d: *const NmbTextureDescriptor) -> Result<TextureDescripto
     out.array_length = d.array_length;
     out.usage = raw::<TextureUsage>(d.usage, "texture usage")?;
     out.resource_options = options(d.options)?;
+    out.allow_gpu_optimized_contents = match d.allow_gpu_optimized_contents {
+        0 => false,
+        1 => true,
+        _ => return Err("invalid allowGPUOptimizedContents".into()),
+    };
+    out.swizzle = texture_swizzle(&d.swizzle)?;
+    out.rotation = d.rotation;
+    out.framebuffer_only = d.framebuffer_only != 0;
+    out.is_drawable = d.is_drawable != 0;
     Ok(out)
 }
 
@@ -855,6 +925,23 @@ pub extern "C" fn nmb_texture_new_view(texture: *mut NmbTexture, format: u64, ki
     })
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_texture_new_view_swizzle(texture: *mut NmbTexture, format: u64, kind: u64,
+    levels: *const u64, slices: *const u64, swizzle: *const u64) -> *mut NmbTexture {
+    guard(std::ptr::null_mut(), || {
+        let t = &get(texture)?.0;
+        let l = get(levels.cast::<[u64; 2]>())?;
+        let s = get(slices.cast::<[u64; 2]>())?;
+        let swizzle = texture_swizzle(get(swizzle.cast::<[u64; 4]>())?)?;
+        let view = t.new_texture_view_with_swizzle(
+            raw::<PixelFormat>(format, "pixel format")?, raw::<TextureType>(kind, "texture type")?,
+            l[0]..l[0].checked_add(l[1]).ok_or("levels overflow")?,
+            s[0]..s[0].checked_add(s[1]).ok_or("slices overflow")?, swizzle,
+        ).map_err(e("texture view swizzle"))?;
+        Ok(boxed(NmbTexture(view)))
+    })
+}
+
 /// `setPurgeableState:` on a texture: the runtime's answer as Metal's raw state, 0 where it fails.
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_texture_set_purgeable_state(texture: *const NmbTexture, state: u64) -> u64 {
@@ -894,6 +981,11 @@ pub extern "C" fn nmb_texture_describe(texture: *const NmbTexture, out: *mut Nmb
             array_length: t.array_length(),
             usage: t.usage().as_raw() as u64,
             options: t.resource_options().raw(),
+            allow_gpu_optimized_contents: t.allow_gpu_optimized_contents() as u64,
+            swizzle: [t.swizzle().red, t.swizzle().green, t.swizzle().blue, t.swizzle().alpha].map(|v| v.as_raw() as u64),
+            rotation: t.rotation(),
+            framebuffer_only: u64::from(t.framebuffer_only()),
+            is_drawable: u64::from(t.is_drawable()),
         };
         Ok(())
     })
@@ -1051,6 +1143,57 @@ pub unsafe extern "C" fn nmb_function_new_specialized(library: *mut NmbLibrary, 
     })
 }
 
+/// Packed bytes of a function constant's `MTLDataType` (scalars and vectors), 0 for a type that is not given a value.
+fn constant_bytes(raw: u32) -> usize {
+    // MTLDataType numbers each scalar family's 1-, 2-, 3- and 4-lane types consecutively; a value is packed, lanes times the scalar.
+    let (first, scalar) = match raw {
+        3..=6 => (3, 4),       // float
+        16..=19 => (16, 2),    // half
+        29..=32 => (29, 4),    // int
+        33..=36 => (33, 4),    // uint
+        37..=40 => (37, 2),    // short
+        41..=44 => (41, 2),    // ushort
+        45..=48 => (45, 1),    // char
+        49..=52 => (49, 1),    // uchar
+        53..=56 => (53, 1),    // bool
+        81..=84 => (81, 8),    // long
+        85..=88 => (85, 8),    // ulong
+        121..=124 => (121, 2), // bfloat
+        _ => return 0,
+    };
+    (raw - first + 1) as usize * scalar
+}
+
+/// The library's function `name` with every function constant it declares set to zero (false for a bool), for shader priming: a
+/// function whose code uses a constant's value is otherwise refused (`NeedsInput(FunctionConstant)`), and this variant still takes its
+/// module through decoding, translation and the driver. Null when a constant's type takes no value.
+///
+/// # Safety
+/// `name` is a C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_function_new_zero_constants(library: *mut NmbLibrary, name: *const c_char) -> *mut NmbFunction {
+    guard(std::ptr::null_mut(), || {
+        if name.is_null() {
+            return Err("null function name".into());
+        }
+        // SAFETY: the caller's contract.
+        let name = unsafe { CStr::from_ptr(name) }.to_str().map_err(e("function name"))?;
+        let library = &get(library)?.0;
+        let generic = library.new_function_with_name(name).map_err(e("function"))?;
+        let mut values = FunctionConstantValues::defaults();
+        for (key, constant) in generic.function_constants_dictionary().map_err(e("function constants"))? {
+            let ty = constant.data_type();
+            let bytes = constant_bytes(ty.as_raw());
+            if bytes == 0 {
+                return Err(format!("function constant {key} of type {}", ty.as_raw()));
+            }
+            values.by_index.insert(constant.index(), FunctionConstantValue::new(ty, vec![0; bytes]));
+        }
+        let function = library.new_function_with_name_constant_values(name, &values).map_err(e("zero-specialized function"))?;
+        Ok(boxed(NmbFunction(function)))
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_function_release(function: *mut NmbFunction) {
     release(function)
@@ -1095,11 +1238,32 @@ pub struct NmbComputePipelineDescriptor {
     pub max_call_stack_depth: u64,
     pub adding_binary_functions: u64,
     pub mutability: [u64; 31],
+    pub linked: *const *mut NmbFunction,
+    pub linked_count: u64,
+    pub private_linked: *const *mut NmbFunction,
+    pub private_linked_count: u64,
+}
+
+/// The linked functions of a counted array of live function handles.
+fn linked_list(functions: *const *mut NmbFunction, count: u64) -> Result<Vec<LinkedFunction>, String> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if functions.is_null() {
+        return Err("null linked functions".into());
+    }
+    // SAFETY: the caller's contract: `count` live handles.
+    let handles = unsafe { std::slice::from_raw_parts(functions, usize::try_from(count).map_err(e("linked function count"))?) };
+    handles.iter().map(|&function| Ok(get(function)?.0.linked_function())).collect()
 }
 
 fn compute_descriptor(descriptor: *const NmbComputePipelineDescriptor) -> Result<ComputePipelineDescriptor, String> {
     let d = get(descriptor)?;
-    let mut out = ComputePipelineDescriptor::new(StageSource::Function(get(d.function)?.0.function_descriptor()));
+    let mut linked = LinkedFunctions::new();
+    linked.functions = linked_list(d.linked, d.linked_count)?;
+    linked.private_functions = linked_list(d.private_linked, d.private_linked_count)?;
+    let kernel = get(d.function)?.0.function_descriptor().with_linked(linked);
+    let mut out = ComputePipelineDescriptor::new(StageSource::Function(kernel));
     out.max_total_threads_per_threadgroup = if d.max_threads == 0 { None } else { Some(u32::try_from(d.max_threads).map_err(e("compute max threads"))?) };
     out.threadgroup_size_is_multiple_of_execution_width = d.multiple_of_execution_width != 0;
     out.support_indirect_command_buffers = d.indirect != 0;
@@ -1440,6 +1604,37 @@ pub struct NmbQueue(CommandQueue);
 pub struct NmbCommandBuffer(CommandBuffer);
 
 #[unsafe(no_mangle)]
+pub extern "C" fn nmb_command_buffer_trace(buffer: *const NmbCommandBuffer, kind: u16, arg: u64) {
+    if !buffer.is_null() {
+        // SAFETY: the frontend retains its command buffer during the call.
+        let id = unsafe { &*buffer }.0.diagnostic_id();
+        metal2vulkan_runtime::stage_trace::frontend(id, kind, arg);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_stage_ring_read(from: u64, out: *mut metal2vulkan_runtime::stage_trace::StageRecord,
+                                     count: usize, next: *mut u64) -> usize {
+    if out.is_null() || next.is_null() || count == 0 || count > 4096 { return 0; }
+    // SAFETY: caller provides count valid output records and one next cursor.
+    let records = unsafe { std::slice::from_raw_parts_mut(out, count) };
+    let (copied, following) = metal2vulkan_runtime::stage_trace::read(from, records);
+    unsafe { *next = following; }
+    copied
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_stage_ring_stop() { metal2vulkan_runtime::stage_trace::stop(); }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_stage_ring_stats(out: *mut u64) {
+    if !out.is_null() {
+        // SAFETY: caller provides two output words.
+        unsafe { std::ptr::copy_nonoverlapping(metal2vulkan_runtime::stage_trace::statistics().as_ptr(), out, 2); }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn nmb_queue_new(device: *mut NmbDevice) -> *mut NmbQueue {
     guard(std::ptr::null_mut(), || Ok(boxed(NmbQueue(get(device)?.0.new_command_queue().map_err(e("queue"))?))))
 }
@@ -1756,6 +1951,11 @@ pub struct NmbPassAttachment {
     pub load: u64,
     pub store: u64,
     pub clear: [f64; 4],
+    pub resolve_texture: *mut NmbTexture,
+    pub resolve_level: u64,
+    pub resolve_slice: u64,
+    pub resolve_depth_plane: u64,
+    pub resolve_filter: u64,
 }
 
 #[repr(C)]
@@ -1782,6 +1982,10 @@ pub extern "C" fn nmb_render_encoder_new(command_buffer: *mut NmbCommandBuffer, 
         let mut pass = RenderPassDescriptor::new();
         for (slot, a) in pass.color_attachments.iter_mut().zip(d.colors.iter()) {
             slot.texture = texture_of(a)?;
+            slot.resolve_texture = optional(a.resolve_texture)?.map(|t| t.0.clone());
+            slot.resolve_level = a.resolve_level;
+            slot.resolve_slice = a.resolve_slice;
+            slot.resolve_depth_plane = a.resolve_depth_plane;
             slot.level = a.level;
             slot.slice = a.slice;
             slot.depth_plane = a.depth_plane;
@@ -1791,6 +1995,11 @@ pub extern "C" fn nmb_render_encoder_new(command_buffer: *mut NmbCommandBuffer, 
         }
         let depth = &mut pass.depth_attachment;
         depth.texture = texture_of(&d.depth)?;
+        depth.resolve_texture = optional(d.depth.resolve_texture)?.map(|t| t.0.clone());
+        depth.resolve_level = d.depth.resolve_level;
+        depth.resolve_slice = d.depth.resolve_slice;
+        depth.resolve_depth_plane = d.depth.resolve_depth_plane;
+        depth.depth_resolve_filter = MultisampleDepthResolveFilter::from_raw(d.depth.resolve_filter).map_err(e("depth resolve filter"))?;
         depth.level = d.depth.level;
         depth.slice = d.depth.slice;
         depth.depth_plane = d.depth.depth_plane;
@@ -1799,6 +2008,11 @@ pub extern "C" fn nmb_render_encoder_new(command_buffer: *mut NmbCommandBuffer, 
         depth.clear_depth = d.depth.clear[0];
         let stencil = &mut pass.stencil_attachment;
         stencil.texture = texture_of(&d.stencil)?;
+        stencil.resolve_texture = optional(d.stencil.resolve_texture)?.map(|t| t.0.clone());
+        stencil.resolve_level = d.stencil.resolve_level;
+        stencil.resolve_slice = d.stencil.resolve_slice;
+        stencil.resolve_depth_plane = d.stencil.resolve_depth_plane;
+        stencil.stencil_resolve_filter = MultisampleStencilResolveFilter::from_raw(d.stencil.resolve_filter).map_err(e("stencil resolve filter"))?;
         stencil.level = d.stencil.level;
         stencil.slice = d.stencil.slice;
         stencil.depth_plane = d.stencil.depth_plane;
@@ -1977,6 +2191,17 @@ pub extern "C" fn nmb_compute_dispatch(encoder: *mut NmbEncoder, size: *const u6
         let (s, g) = (Size::new(s[0], s[1], s[2]), Size::new(g[0], g[1], g[2]));
         let c = compute(encoder)?;
         if threads { c.dispatch_threads(s, g) } else { c.dispatch_threadgroups(s, g) }.map_err(e("dispatch"))?;
+        Ok(true)
+    })
+}
+
+// AdrenoMetal 22f4dbdb: the GPU consumes the argument buffer, never a CPU snapshot.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_compute_dispatch_indirect(encoder: *mut NmbEncoder, buffer: *mut NmbBuffer, offset: u64, per_group: *const u64) -> bool {
+    guard(false, || {
+        let g = triple(per_group)?;
+        compute(encoder)?.dispatch_threadgroups_indirect(&get(buffer)?.0, offset, Size::new(g[0], g[1], g[2]))
+            .map_err(e("indirect dispatch"))?;
         Ok(true)
     })
 }

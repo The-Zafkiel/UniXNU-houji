@@ -4,6 +4,10 @@
 #include "HoujiReadPolicy.h"
 #include "HoujiLogPolicy.h"
 #include "HoujiRootPolicy.h"
+#include "battery/HoujiFirmwareReadPolicy.h"
+// Owned by gHost.lock; armed for one native firmware read and cleared before
+// releasing the lock. Existing root/log/recovery write grants are unchanged.
+static HoujiFirmwareReadGrant gFirmwareReadGrant;
 
 struct HardwareTransferPort {
   uint64_t deadline;
@@ -40,7 +44,8 @@ static IOReturn hostSubmit (uint32_t direction, uint32_t dataBytes, uint32_t tim
   if (!houjiUfsReadCommandAllowed(gHost.virt+kUcdOffset,32,direction,dataBytes) &&
       !houjiUfsLogCommandAllowed(gHost.virt+kUcdOffset,32,direction,dataBytes,gLogEnabled,gLogArmed) &&
       !houjiUfsRootCommandAllowed(gHost.virt+kUcdOffset,32,direction,dataBytes,gRootEnabled,gRootArmed) &&
-      !houjiUfsRecoveryCommandAllowed(gHost.virt+kUcdOffset,32,direction,dataBytes,gReturnRecovery,gRecoveryArmed))
+      !houjiUfsRecoveryCommandAllowed(gHost.virt+kUcdOffset,32,direction,dataBytes,gReturnRecovery,gRecoveryArmed) &&
+      !houjiUfsFirmwareCommandAllowed(gHost.virt+kUcdOffset,32,direction,dataBytes,gFirmwareReadGrant))
     return kIOReturnNotPermitted;
   if (!timeoutUs || dataBytes > kDataMax || (dataBytes & 3) ||
       (dataBytes ? (direction != 1 && direction != 2) : direction != 0)) return kIOReturnBadArgument;

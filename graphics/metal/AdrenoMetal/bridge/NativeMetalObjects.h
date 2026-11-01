@@ -41,6 +41,10 @@ uint64_t nmb_device_max_buffer_length(const NmbDevice *);
 bool nmb_device_work_stats(const NmbDevice *, uint64_t out[10]);
 /* QoS initiated/interactive requests, set/read errors, observed initiated/interactive. */
 void nmb_thread_qos_stats(uint64_t out[6]);
+/* Diagnostic fresh-pattern marker: enabled flag, planned texture count. No GPU work. */
+void nmb_pattern_probe_stats(uint64_t out[2]);
+/* Checked/remapped ranges, identity queries/unknowns, total/max query us. */
+bool nmb_no_copy_remaps(uint64_t out[6]);
 /* Artifact lookups and driver pipeline records are separate cache layers. */
 struct NmbShaderCacheStats {
     uint64_t hits, misses, rejected, read_failures, writes, write_failures, evictions;
@@ -49,6 +53,14 @@ struct NmbShaderCacheStats {
 bool nmb_device_shader_cache_stats(const NmbDevice *, struct NmbShaderCacheStats *);
 size_t nmb_last_warning(char *out, size_t size);
 bool nmb_device_max_threads_per_threadgroup(const NmbDevice *, uint64_t out[3]);
+/* Free only retired image spares and empty pool blocks on memory pressure. */
+size_t nmb_device_release_kept_memory(const NmbDevice *);
+/* Opt-in bounded command-stage diagnostics; timestamps are CLOCK_UPTIME_RAW ns. */
+struct NmbStageRecord { uint64_t when, id; uint32_t sequence; uint16_t stage, arg; };
+size_t nmb_stage_ring_read(uint64_t from, struct NmbStageRecord *, size_t count, uint64_t *next);
+void nmb_stage_ring_stop(void);
+void nmb_stage_ring_stats(uint64_t out[2]);
+void nmb_command_buffer_trace(const NmbCommandBuffer *, uint16_t kind, uint64_t arg);
 /* Device queries the runtime answers by Metal selector: Apple's private counts and flags where the device has an answer of its own,
  * and the public queries. A selector's kind says its result and argument. */
 enum {NMB_ANSWER_COUNT = 0, NMB_ANSWER_FLAG = 1, NMB_ANSWER_COUNT_ARG = 2, NMB_ANSWER_FLAG_ARG = 3};
@@ -77,7 +89,13 @@ uint64_t nmb_buffer_gpu_address(const NmbBuffer *);
 
 struct NmbTextureDescriptor {
     uint64_t type, format, width, height, depth, levels, samples, array_length, usage, options;
+    uint64_t allow_gpu_optimized_contents; /* exactly 0 or 1 */
+    uint64_t swizzle[4]; /* Metal channel sources: red, green, blue, alpha */
+    uint64_t rotation, framebuffer_only, is_drawable;
 };
+#if defined(__cplusplus)
+static_assert(sizeof(NmbTextureDescriptor)==144, "matched Rust/C texture descriptor");
+#endif
 /* Heaps: type 0 automatic / 1 placement; offset UINT64_MAX asks an automatic heap to place the resource. */
 NmbHeap *nmb_heap_new(NmbDevice *, uint64_t type, uint64_t size, uint64_t options);
 void nmb_heap_release(NmbHeap *);
@@ -100,6 +118,7 @@ NmbTexture *nmb_texture_new_native_astc4x4(NmbBuffer *, const NmbTextureDescript
 NmbTexture *nmb_texture_new_linear(NmbBuffer *, const struct NmbTextureDescriptor *, uint64_t offset, uint64_t bytes_per_row, uint64_t bytes_per_image);
 /* whole: a view of every level and slice as format; else levels and slices are {start, count} and kind the view's texture type. */
 NmbTexture *nmb_texture_new_view(NmbTexture *, uint64_t format, uint64_t kind, const uint64_t levels[2], const uint64_t slices[2], bool whole);
+NmbTexture *nmb_texture_new_view_swizzle(NmbTexture *, uint64_t format, uint64_t kind, const uint64_t levels[2], const uint64_t slices[2], const uint64_t swizzle[4]);
 /* setPurgeableState: with Metal's raw state; the answer's raw state, 0 where it fails. */
 uint64_t nmb_texture_set_purgeable_state(const NmbTexture *, uint64_t state);
 uint64_t nmb_buffer_set_purgeable_state(const NmbBuffer *, uint64_t state);
@@ -120,6 +139,7 @@ NmbFunction *nmb_function_new(NmbLibrary *, const char *name);
  * indexed value; bytes holds the value's bytes. */
 struct NmbConstant {uint64_t type, index; const char *name; const void *bytes; uint64_t length;};
 NmbFunction *nmb_function_new_specialized(NmbLibrary *, const char *name, const struct NmbConstant *constants, uint32_t count);
+NmbFunction *nmb_function_new_zero_constants(NmbLibrary *, const char *name);
 void nmb_function_release(NmbFunction *);
 /* Metal's MTLFunctionType (1 vertex, 2 fragment, 3 kernel, ...). */
 uint64_t nmb_function_type(const NmbFunction *);
@@ -150,6 +170,9 @@ struct NmbComputePipelineDescriptor {
     NmbFunction *function;
     uint64_t max_threads, multiple_of_execution_width, indirect, max_call_stack_depth, adding_binary_functions;
     uint64_t mutability[31];
+    /* linkedFunctions.functions and .privateFunctions: visible functions the kernel calls. */
+    NmbFunction *const *linked; uint64_t linked_count;
+    NmbFunction *const *private_linked; uint64_t private_linked_count;
 };
 NmbComputePipeline *nmb_compute_pipeline_new_with_options(NmbDevice *, NmbFunction *, const struct NmbPipelineOptions *);
 NmbComputePipeline *nmb_compute_pipeline_new_with_descriptor(NmbDevice *, const struct NmbComputePipelineDescriptor *, const struct NmbPipelineOptions *);
@@ -220,6 +243,8 @@ struct NmbPassAttachment {
     NmbTexture *texture;
     uint64_t level, slice, depth_plane, load, store;
     double clear[4]; /* color, or clear[0] depth / stencil */
+    NmbTexture *resolve_texture;
+    uint64_t resolve_level, resolve_slice, resolve_depth_plane, resolve_filter;
 };
 struct NmbRenderPassDescriptor {
     struct NmbPassAttachment colors[8], depth, stencil;
@@ -240,6 +265,7 @@ bool nmb_encoder_set_sampler(NmbEncoder *, uint32_t stage, NmbSampler *, uint32_
 bool nmb_compute_set_pipeline(NmbEncoder *, NmbComputePipeline *);
 bool nmb_compute_set_threadgroup_memory(NmbEncoder *, uint32_t length, uint32_t index);
 bool nmb_compute_dispatch(NmbEncoder *, const uint64_t size[3], const uint64_t per_group[3], bool threads);
+bool nmb_compute_dispatch_indirect(NmbEncoder *, NmbBuffer *, uint64_t offset, const uint64_t per_group[3]);
 
 bool nmb_render_set_pipeline(NmbEncoder *, NmbRenderPipeline *);
 bool nmb_render_set_depth_stencil(NmbEncoder *, NmbDepthStencil *);

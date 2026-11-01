@@ -10,6 +10,7 @@
 #import <Metal/Metal.h>
 #import <IOSurface/IOSurfaceRef.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #include <algorithm>
 #include <atomic>
 #include <mutex>
@@ -23,8 +24,13 @@
 #include <execinfo.h>
 #include <mach/mach.h>
 #include <cmath>
+#include <unistd.h>
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
+#include "NativeMetalAsync.h"
+#include "NativeTurnipPolicy.h"
+#include "NativeGpuTrace.h"
+#include "NativeMetalCpuProfile.h"
 
 extern "C" void sys_dcache_flush(void *start, size_t length);
 
@@ -33,6 +39,8 @@ static id gDeviceObject;
 static uint64_t gRegistryID;
 static NSString *gName;
 static void (*gMissing)(const char *, const char *);
+static std::atomic<void (*)(uint64_t *)> gDriverCacheStats{nullptr};
+static std::atomic<void (*)(uint64_t *)> gDriverCacheFitStats{nullptr};
 
 // What this device has been asked and refused, for the plugin's status line (native_bridge_metal_status): commits, render/compute pipelines made,
 // refusals, and the last two refusals' texts. Counters only; nothing here changes a result.
@@ -62,6 +70,13 @@ struct EncodedWork {uint32_t passes,draws,dispatches,blits;uint64_t pixels,drawU
 struct CommitRecord {uint64_t committedUs=0,callbackUs=0,ageUs=0;int64_t scheduledUs=-1,gpuUs=-1,submitUs=-1;uint32_t index=0;EncodedWork work={};};
 static CommitRecord gCommitRing[32];
 static std::mutex gCommitLock;
+unsigned native_bridge_metal_recent_commits(uint64_t window_us) {
+ std::lock_guard<std::mutex> lock(gCommitLock);
+ const uint64_t now=nowUs();unsigned count=0;
+ for(const auto &r:gCommitRing)
+  if(r.index && now>=r.committedUs && now-r.committedUs<window_us)++count;
+ return count; // saturated at 32; the primer only needs the >8 threshold
+}
 static std::mutex gProblemLock;
 static char gLastProblems[2][200];
 static char gFirstProblem[200];
@@ -96,7 +111,29 @@ static void noteProblem(NSString *what) {
 static uint32_t gFormats[8];static unsigned gFormatCount;static std::atomic<uint64_t> gTextureRefusals;
 // Textures over IOSurfaces: made, refused, and how many of the requests named a planar surface.
 static std::atomic<uint64_t> gSurfaceTextures,gSurfaceRefusals,gSurfacePlanar;
+static std::atomic<uint64_t> gSurfaceRotations[5],gResolveAttachments,gIndirectDispatches,gPressureFreed;
+// AdrenoMetal 22f4dbdb: optional SPI on the target OS, never a guessed descriptor offset.
+static uint64_t textureRotation(id descriptor) {
+ SEL sel=sel_registerName("rotation");
+ return [descriptor respondsToSelector:sel]?((NSUInteger (*)(id,SEL))objc_msgSend)(descriptor,sel):0;
+}
+static bool textureFlag(id descriptor,const char *name) {
+ SEL sel=sel_registerName(name);
+ return [descriptor respondsToSelector:sel] && ((BOOL (*)(id,SEL))objc_msgSend)(descriptor,sel);
+}
+static void watchMemoryPressure() {
+ static dispatch_once_t once;
+ static dispatch_source_t source;
+ dispatch_once(&once,^{
+  source=dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE,0,
+   DISPATCH_MEMORYPRESSURE_WARN|DISPATCH_MEMORYPRESSURE_CRITICAL,dispatch_get_global_queue(QOS_CLASS_UTILITY,0));
+  if(!source)return;
+  dispatch_source_set_event_handler(source,^{if(gDevice)gPressureFreed+=nmb_device_release_kept_memory(gDevice);});
+  dispatch_activate(source);
+ });
+}
 static std::atomic<uint64_t> gXrPlanarSurfaces,gXr553Pipelines,gXr553Failures;
+static std::atomic<uint64_t> gTextureUnoptimizedRequests,gTextureSwizzledRequests,gTextureSwizzledViews;
 // The last refused surface texture: the check that refused it (1 plane, 2 base, 3 plane range, 4 import, 5 texture), the surface's format,
 // planes, requested plane, plane offset, plane row bytes and allocation, and the descriptor's size and pixel format.
 struct SurfaceRefusal {uint32_t step,format,planes,plane,pixelFormat;uint64_t offset,row,allocation,width,height;};
@@ -129,10 +166,27 @@ static void journal(const std::string &line) {
  if(FILE *f=fopen(gJournalPath.c_str(),"a")){fwrite(line.data(),1,line.size(),f);fputc('\n',f);fclose(f);}
 }
 
-@interface NBObject : NSObject
+// Metal's command encoder SPI exposes a stable uint64 trace identity. Poster
+// frameworks call it without respondsToSelector:. Namespace by process and
+// never recycle an object's sequence number; this is not a GPU address/fence.
+static std::atomic<uint64_t> gTraceObjectSequence{1};
+@interface NBObject : NSObject {
+ uint64_t _globalTraceObjectID;
+}
 @property(atomic,copy) NSString *label;
+@property(nonatomic,readonly) uint64_t globalTraceObjectID;
 @end
 @implementation NBObject
+- (instancetype)init {
+ if((self=[super init])) {
+  const uint64_t sequence=gTraceObjectSequence.fetch_add(1,std::memory_order_relaxed);
+  if(sequence>UINT32_MAX)
+   [NSException raise:NSInternalInconsistencyException format:@"native-metal: trace identity space exhausted"];
+  _globalTraceObjectID=((uint64_t)(uint32_t)getpid()<<32)|sequence;
+ }
+ return self;
+}
+- (uint64_t)globalTraceObjectID {return _globalTraceObjectID;}
 - (id<MTLDevice>)device {return gDeviceObject;}
 - (void)doesNotRecognizeSelector:(SEL)selector {
  if(gMissing)gMissing(class_getName(object_getClass(self)),sel_getName(selector));
@@ -145,6 +199,9 @@ static void journal(const std::string &line) {
 // The wait takes a strong snapshot of already-committed buffers; new commits require the
 // caller's usual resource synchronization. Storage dependency checks are in the runtime.
 static NSMutableSet *gInFlight;
+unsigned native_bridge_metal_pending_commits(void) {
+ @synchronized(gInFlight){return (unsigned)gInFlight.count;}
+}
 static void waitForResource(id resource);
 // Resource SPI the runtime has no state for: no protected content (Metal's default options), and no owner transfer
 // (memory attribution is the kernel driver's, by the importing task), refused as not supported.
@@ -170,7 +227,14 @@ static void waitForResource(id resource);
 @property(nonatomic,strong) id<MTLTexture> parent;
 @property(nonatomic,strong) id<MTLHeap> parentHeap;
 @property(nonatomic) NSUInteger heapOffset;
+@property(nonatomic) BOOL counted;
+- (void)countUse;
 @end
+// AdrenoMetal 4d789e9: a retained wrapper alone does not mark the surface in use
+// for IOSurface pools. Only the render server opts in; command resource owners
+// already keep each texture/view until completion, including frontend failures.
+static const bool gCountsSurfaceUse=!strcmp(getprogname(),"backboardd");
+static std::atomic<uint64_t> gSurfaceUseAdded,gSurfaceUseRemoved;
 // A no-copy import keeps its pages until the runtime frees it, which can be after the buffer object goes (a command buffer still using
 // it). The owner's release (Metal's deallocator, an IOSurface's mapping) waits for that, as Metal's does: run earlier, the owner could
 // unmap or reuse pages the GPU still reads or writes.
@@ -234,11 +298,22 @@ static NBBuffer *surfaceBuffer(IOSurfaceRef surface,void *base,size_t bytes) {
 }
 static bool textureDescriptor(MTLTextureDescriptor *d,NmbTextureDescriptor *out) {
  if(!d)return false;
- *out={(uint64_t)d.textureType,(uint64_t)d.pixelFormat,d.width,d.height,d.depth,d.mipmapLevelCount,d.sampleCount,d.arrayLength,(uint64_t)d.usage,(uint64_t)d.resourceOptions};
+ const MTLTextureSwizzleChannels swizzle=d.swizzle;
+ *out={(uint64_t)d.textureType,(uint64_t)d.pixelFormat,d.width,d.height,d.depth,d.mipmapLevelCount,d.sampleCount,d.arrayLength,(uint64_t)d.usage,(uint64_t)d.resourceOptions,
+       (uint64_t)d.allowGPUOptimizedContents,{(uint64_t)swizzle.red,(uint64_t)swizzle.green,(uint64_t)swizzle.blue,(uint64_t)swizzle.alpha},
+       textureRotation(d),textureFlag(d,"framebufferOnly"),textureFlag(d,"isDrawable")};
+ if(!d.allowGPUOptimizedContents)gTextureUnoptimizedRequests++;
+ if(swizzle.red!=MTLTextureSwizzleRed || swizzle.green!=MTLTextureSwizzleGreen || swizzle.blue!=MTLTextureSwizzleBlue || swizzle.alpha!=MTLTextureSwizzleAlpha)gTextureSwizzledRequests++;
  return true;
 }
 @implementation NBTexture
-- (void)dealloc {nmb_texture_release(_handle);if(_surface)CFRelease(_surface);}
+- (void)dealloc {
+ nmb_texture_release(_handle);
+ if(_surface){if(_counted){IOSurfaceDecrementUseCount(_surface);gSurfaceUseRemoved++;}CFRelease(_surface);}
+}
+- (void)countUse {
+ if(_surface && !_counted && gCountsSurfaceUse){IOSurfaceIncrementUseCount(_surface);_counted=YES;gSurfaceUseAdded++;}
+}
 - (MTLTextureType)textureType {return (MTLTextureType)_descriptor.type;}
 - (MTLPixelFormat)pixelFormat {return (MTLPixelFormat)_descriptor.format;}
 - (NSUInteger)width {return _descriptor.width;}
@@ -251,14 +326,19 @@ static bool textureDescriptor(MTLTextureDescriptor *d,NmbTextureDescriptor *out)
 - (MTLResourceOptions)resourceOptions {return (MTLResourceOptions)_descriptor.options;}
 - (MTLStorageMode)storageMode {return (MTLStorageMode)((_descriptor.options&MTLResourceStorageModeMask)>>MTLResourceStorageModeShift);}
 - (MTLCPUCacheMode)cpuCacheMode {return (MTLCPUCacheMode)((_descriptor.options&MTLResourceCPUCacheModeMask)>>MTLResourceCPUCacheModeShift);}
-- (BOOL)isFramebufferOnly {return NO;}
+- (BOOL)allowGPUOptimizedContents {return _descriptor.allow_gpu_optimized_contents!=0;}
+- (MTLTextureSwizzleChannels)swizzle {
+ return MTLTextureSwizzleChannelsMake((MTLTextureSwizzle)_descriptor.swizzle[0],(MTLTextureSwizzle)_descriptor.swizzle[1],(MTLTextureSwizzle)_descriptor.swizzle[2],(MTLTextureSwizzle)_descriptor.swizzle[3]);
+}
+- (BOOL)isFramebufferOnly {return _descriptor.framebuffer_only!=0;}
+- (BOOL)isDrawable {return _descriptor.is_drawable!=0;}
 - (IOSurfaceRef)iosurface {return _surface;}
 - (NSUInteger)iosurfacePlane {return 0;}
 - (id<MTLBuffer>)buffer {return _surface?nil:(id<MTLBuffer>)_buffer;}
 - (NSUInteger)bufferOffset {return _offset;}
 - (NSUInteger)bufferBytesPerRow {return _rowBytes;}
 - (id<MTLTexture>)parentTexture {return _parent;}
-- (NSUInteger)rotation {return 0;}
+- (NSUInteger)rotation {return _descriptor.rotation;}
 - (MTLPurgeableState)setPurgeableState:(MTLPurgeableState)state {
  const uint64_t answer=nmb_texture_set_purgeable_state(_handle,state);
  if(!answer)NBLOG(@"native-metal: texture setPurgeableState refused: %@",lastError());
@@ -269,7 +349,7 @@ NB_RESOURCE_SPI
  if(!handle){NBLOG(@"native-metal: texture view refused: %@",lastError());return nil;}
  NBTexture *view=[NBTexture new];view.handle=handle;NmbTextureDescriptor descriptor;nmb_texture_describe(handle,&descriptor);view.descriptor=descriptor;
  view.parent=(id<MTLTexture>)self;view.buffer=_buffer;view.offset=_offset;view.rowBytes=_rowBytes;
- if(_surface)view.surface=(IOSurfaceRef)CFRetain(_surface);
+ if(_surface){view.surface=(IOSurfaceRef)CFRetain(_surface);[view countUse];}
  return (id<MTLTexture>)view;
 }
 - (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format {
@@ -278,6 +358,12 @@ NB_RESOURCE_SPI
 - (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format textureType:(MTLTextureType)type levels:(NSRange)levels slices:(NSRange)slices {
  const uint64_t l[2]={levels.location,levels.length},s[2]={slices.location,slices.length};
  return [self view:nmb_texture_new_view(_handle,format,type,l,s,false)];
+}
+- (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format textureType:(MTLTextureType)type levels:(NSRange)levels slices:(NSRange)slices swizzle:(MTLTextureSwizzleChannels)swizzle {
+ const uint64_t l[2]={levels.location,levels.length},s[2]={slices.location,slices.length};
+ const uint64_t channels[4]={(uint64_t)swizzle.red,(uint64_t)swizzle.green,(uint64_t)swizzle.blue,(uint64_t)swizzle.alpha};
+ gTextureSwizzledViews++;
+ return [self view:nmb_texture_new_view_swizzle(_handle,format,type,l,s,channels)];
 }
 - (void)replaceRegion:(MTLRegion)r mipmapLevel:(NSUInteger)level slice:(NSUInteger)slice withBytes:(const void *)bytes bytesPerRow:(NSUInteger)row bytesPerImage:(NSUInteger)image {
  const uint64_t region[6]={r.origin.x,r.origin.y,r.origin.z,r.size.width,r.size.height,r.size.depth};
@@ -379,18 +465,25 @@ static uint64_t constantBytes(uint64_t type) {
  switch(type) {
   case 3:case 29:case 33:return 4;
   case 4:case 30:case 34:return 8;
+  case 5:case 31:case 35:return 12;
   case 6:case 32:case 36:return 16;
   case 16:case 37:case 41:return 2;
   case 17:case 38:case 42:return 4;
+  case 18:case 39:case 43:return 6;
   case 19:case 40:case 44:return 8;
-  // iOS16 QuartzCore fixed_frag_lph_cph uses a tightly packed uchar3 constant.
-  case MTLDataTypeUChar3:return 3;
+  // Function constants use packed lanes, including QuartzCore's uchar3.
+  case 47:case 51:case 55:return 3;
   case 45:case 49:case 53:return 1;
   case 46:case 50:case 54:return 2;
   case 48:case 52:case 56:return 4;
   case 81:case 85:return 8;
   case 82:case 86:return 16;
+  case 83:case 87:return 24;
   case 84:case 88:return 32;
+  case 121:return 2;
+  case 122:return 4;
+  case 123:return 6;
+  case 124:return 8;
   default:return 0;
  }
 }
@@ -437,8 +530,11 @@ static std::string quartzCoreCallers();
  function.constantsText=text;if(error)*error=nil;return (id<MTLFunction>)function;
 }
 - (void)newFunctionWithName:(NSString *)name constantValues:(MTLFunctionConstantValues *)values completionHandler:(void (^)(id<MTLFunction>,NSError *))handler {
- NSError *error=nil;id<MTLFunction> function=[self newFunctionWithName:name constantValues:values error:&error];
- handler(function,error);
+ NSString *nameSnapshot=[name copy];MTLFunctionConstantValues *snapshot=[values copy];
+ nbCompileAsync(NBCompileKind::Function, ^{
+  NSError *error=nil;id<MTLFunction> function=[self newFunctionWithName:nameSnapshot constantValues:snapshot error:&error];
+  nbCompleteAsync(^{handler(function,error);});
+ });
 }
 - (MTLLibraryType)type {return MTLLibraryTypeExecutable;}
 // The descriptor's name and constants; its specialized name only labels Metal's function and its options ask for compile-time work the
@@ -450,6 +546,14 @@ static std::string quartzCoreCallers();
  if(!function){if(error)*error=nbError([NSString stringWithFormat:@"function %@: %@",d.name,lastError()]);return nil;}
  if(error)*error=nil;return function;
 }
+- (void)newFunctionWithDescriptor:(MTLFunctionDescriptor *)d completionHandler:(void (^)(id<MTLFunction>,NSError *))handler {
+ MTLFunctionDescriptor *snapshot=[d copy];
+ snapshot.constantValues=[d.constantValues copy];
+ nbCompileAsync(NBCompileKind::Function, ^{
+  NSError *error=nil;id<MTLFunction> function=[self newFunctionWithDescriptor:snapshot error:&error];
+  nbCompleteAsync(^{handler(function,error);});
+ });
+}
 - (NSArray<NSString *> *)functionNames {
  NSMutableArray *names=[NSMutableArray array];
  for(uint32_t i=0,n=nmb_library_function_count(_handle);i<n;i++) {
@@ -460,6 +564,13 @@ static std::string quartzCoreCallers();
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name {
  const uint64_t functionBegan=nowUs();
  NmbFunction *handle=name?nmb_function_new(_handle,name.UTF8String):nullptr;gTimeFunction.add(functionBegan);
+ if(!handle)return nil;
+ NBFunction *function=[NBFunction new];function.handle=handle;function.name=name;function.functionType=(MTLFunctionType)nmb_function_type(handle);
+ return (id<MTLFunction>)function;
+}
+// Shader priming (PrimeShaders.h): the function with each of its function constants set to zero, or nil.
+- (id<MTLFunction>)nb_newFunctionWithZeroConstants:(NSString *)name {
+ NmbFunction *handle=name?nmb_function_new_zero_constants(_handle,name.UTF8String):nullptr;
  if(!handle)return nil;
  NBFunction *function=[NBFunction new];function.handle=handle;function.name=name;function.functionType=(MTLFunctionType)nmb_function_type(handle);
  return (id<MTLFunction>)function;
@@ -561,6 +672,9 @@ static void notified(void *context,uint64_t value) {
 // Runtime handles retain GPU storage, but only the Objective-C owner retains
 // a no-copy deallocator, its memory owner and texture/heap ancestry.
 @property(nonatomic,strong) NSMutableSet *resourceOwners;
+// Metal's command-buffer SPI lets framework clients associate per-buffer
+// bookkeeping. Keep a separate mutable dictionary for each buffer's lifetime.
+@property(nonatomic,strong,readonly) NSMutableDictionary *userDictionary;
 @property(nonatomic,strong) dispatch_group_t handlers;
 @property(nonatomic,strong) dispatch_group_t schedulingHandlers;
 @property(nonatomic) BOOL schedulingDelivered;
@@ -603,6 +717,7 @@ static void waitForResource(id resource) {
  return ok;
 }
 - (void)endEncoding {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::End);
  ScopedTimed measured(gTimeEncoderEnd,&self.commandBuffer->encodedWork.endUs);
  NmbEncoder *handle=_handle;_handle=nullptr;
  if(!handle){[_commandBuffer refuse:@"endEncoding twice"];return;}
@@ -613,24 +728,29 @@ static void waitForResource(id resource) {
 - (void)popDebugGroup {}
 // Stage 0 compute, 1 vertex, 2 fragment (the bridge's numbering).
 - (void)buffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset index:(NSUInteger)index stage:(uint32_t)stage {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Bind);
  if(buffer && ![(id)buffer isKindOfClass:[NBBuffer class]]){[_commandBuffer refuse:@"foreign buffer"];return;}
  if(buffer)[_commandBuffer.resourceOwners addObject:buffer];
  [self check:nmb_encoder_set_buffer(_handle,stage,buffer?[(NBBuffer *)buffer handle]:nullptr,offset,(uint32_t)index) what:"setBuffer"];
 }
 - (void)texture:(id<MTLTexture>)texture index:(NSUInteger)index stage:(uint32_t)stage {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Bind);
  if(texture && ![(id)texture isKindOfClass:[NBTexture class]]){[_commandBuffer refuse:@"foreign texture"];return;}
  if(texture)[_commandBuffer.resourceOwners addObject:texture];
  if(texture && [(NBTexture *)texture surface])[_commandBuffer.surfaces addObject:texture];
  [self check:nmb_encoder_set_texture(_handle,stage,texture?[(NBTexture *)texture handle]:nullptr,(uint32_t)index) what:"setTexture"];
 }
 - (void)sampler:(id<MTLSamplerState>)sampler index:(NSUInteger)index stage:(uint32_t)stage {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Bind);
  if(sampler && ![(id)sampler isKindOfClass:[NBSampler class]]){[_commandBuffer refuse:@"foreign sampler"];return;}
  [self check:nmb_encoder_set_sampler(_handle,stage,sampler?[(NBSampler *)sampler handle]:nullptr,(uint32_t)index) what:"setSamplerState"];
 }
 - (void)bytes:(const void *)bytes length:(NSUInteger)length index:(NSUInteger)index stage:(uint32_t)stage {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Bind);
  [self check:nmb_encoder_set_bytes(_handle,stage,bytes,length,(uint32_t)index) what:"setBytes"];
 }
 - (void)fence:(id<MTLFence>)fence stages:(uint64_t)stages update:(bool)update {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Bind);
  if(![(id)fence isKindOfClass:[NBFence class]]){[_commandBuffer refuse:@"foreign fence"];return;}
  NmbFence *handle=[(NBFence *)fence handle];
  [self check:update?nmb_encoder_update_fence(_handle,handle,stages):nmb_encoder_wait_fence(_handle,handle,stages) what:update?"updateFence":"waitForFence"];
@@ -638,6 +758,7 @@ static void waitForResource(id resource) {
 - (void)updateFence:(id<MTLFence>)fence {[self fence:fence stages:0 update:true];}
 - (void)waitForFence:(id<MTLFence>)fence {[self fence:fence stages:0 update:false];}
 - (void)offset:(NSUInteger)offset index:(NSUInteger)index stage:(uint32_t)stage {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Bind);
  [self check:nmb_encoder_set_buffer_offset(_handle,stage,offset,(uint32_t)index) what:"setBufferOffset"];
 }
 @end
@@ -671,6 +792,13 @@ static void waitForResource(id resource) {
 }
 - (void)dispatchThreads:(MTLSize)t threadsPerThreadgroup:(MTLSize)g {[self dispatch:t group:g threads:true];}
 - (void)dispatchThreadgroups:(MTLSize)t threadsPerThreadgroup:(MTLSize)g {[self dispatch:t group:g threads:false];}
+- (void)dispatchThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)buffer indirectBufferOffset:(NSUInteger)offset threadsPerThreadgroup:(MTLSize)group {
+ if(![(id)buffer isKindOfClass:[NBBuffer class]]){[self.commandBuffer refuse:@"foreign indirect buffer"];return;}
+ [self.commandBuffer.resourceOwners addObject:buffer];
+ gDispatches++;gIndirectDispatches++;self.commandBuffer->encodedWork.dispatches++;
+ const uint64_t g[3]={group.width,group.height,group.depth};
+ [self check:nmb_compute_dispatch_indirect(self.handle,[(NBBuffer *)buffer handle],offset,g) what:"indirect dispatch"];
+}
 - (void)useResource:(id<MTLResource>)r usage:(MTLResourceUsage)u {gResidencyCompute++;[self declareResource:r usage:u stages:0];}
 - (void)memoryBarrierWithScope:(MTLBarrierScope)s {
  gBarrierCompute++;if(![self check:nmb_encoder_memory_barrier_scope(self.handle,s,0,0) what:"memoryBarrierWithScope"])gResourceApiFailures++;
@@ -749,6 +877,7 @@ static void waitForResource(id resource) {
  const float c[4]={r,g,b,a};[self check:nmb_render_set_blend_color(self.handle,c) what:"setBlendColor"];
 }
 - (void)drawPrimitives:(MTLPrimitiveType)t vertexStart:(NSUInteger)s vertexCount:(NSUInteger)n instanceCount:(NSUInteger)i baseInstance:(NSUInteger)b {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Draw);
  ScopedTimed measured(gTimeDraw,&self.commandBuffer->encodedWork.drawUs);
  gDraws++;self.commandBuffer->encodedWork.draws++;
  [self check:nmb_render_draw(self.handle,t,(uint32_t)s,(uint32_t)n,(uint32_t)i,(uint32_t)b) what:"drawPrimitives"];
@@ -761,6 +890,7 @@ static void waitForResource(id resource) {
 }
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)t indexCount:(NSUInteger)n indexType:(MTLIndexType)k indexBuffer:(id<MTLBuffer>)b indexBufferOffset:(NSUInteger)o
                 instanceCount:(NSUInteger)i baseVertex:(NSInteger)v baseInstance:(NSUInteger)bi {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Draw);
  ScopedTimed measured(gTimeDraw,&self.commandBuffer->encodedWork.drawUs);
  if(![(id)b isKindOfClass:[NBBuffer class]]){[self.commandBuffer refuse:@"foreign index buffer"];return;}
  [self.commandBuffer.resourceOwners addObject:b];
@@ -849,7 +979,7 @@ static void completed(void *context);
 static void scheduled(void *context);
 @implementation NBCommandBuffer
 - (instancetype)init {
- if((self=[super init])){_scheduledHandlers=[NSMutableArray array];_completedHandlers=[NSMutableArray array];_surfaces=[NSMutableSet set];_resourceOwners=[NSMutableSet set];_handlers=dispatch_group_create();_schedulingHandlers=dispatch_group_create();}
+ if((self=[super init])){_scheduledHandlers=[NSMutableArray array];_completedHandlers=[NSMutableArray array];_surfaces=[NSMutableSet set];_resourceOwners=[NSMutableSet set];_userDictionary=[NSMutableDictionary dictionary];_handlers=dispatch_group_create();_schedulingHandlers=dispatch_group_create();}
  if(self)createdUs=nowUs();
  return self;
 }
@@ -901,6 +1031,7 @@ static void scheduled(void *context);
  return [self encoder:[NBBlitEncoder new] handle:self.committed?nullptr:nmb_blit_encoder_new(_handle) what:@"blitCommandEncoder"];
 }
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Pass);
  ScopedTimed measured(gTimePass,&encodedWork.passUs);
  NmbRenderPassDescriptor pass={};
  {
@@ -918,6 +1049,14 @@ static void scheduled(void *context);
   NBTexture *texture=(NBTexture *)a.texture;if(texture.surface)[_surfaces addObject:texture];
   [_resourceOwners addObject:texture];
   out.texture=texture.handle;out.level=a.level;out.slice=a.slice;out.depth_plane=a.depthPlane;out.load=a.loadAction;out.store=a.storeAction;
+  if(a.resolveTexture) {
+   if(![(id)a.resolveTexture isKindOfClass:[NBTexture class]])return false;
+   NBTexture *resolve=(NBTexture *)a.resolveTexture;
+   [_resourceOwners addObject:resolve];if(resolve.surface)[_surfaces addObject:resolve];
+   out.resolve_texture=resolve.handle;out.resolve_level=a.resolveLevel;
+   out.resolve_slice=a.resolveSlice;out.resolve_depth_plane=a.resolveDepthPlane;
+   gResolveAttachments++;
+  }
   return true;
  };
  for(unsigned i=0;i<8;i++) {
@@ -927,6 +1066,7 @@ static void scheduled(void *context);
  }
  if(!attachment(d.depthAttachment,pass.depth) || !attachment(d.stencilAttachment,pass.stencil)){[self refuse:@"foreign depth/stencil attachment"];return nil;}
  pass.depth.clear[0]=d.depthAttachment.clearDepth;pass.stencil.clear[0]=d.stencilAttachment.clearStencil;
+ pass.depth.resolve_filter=d.depthAttachment.depthResolveFilter;pass.stencil.resolve_filter=d.stencilAttachment.stencilResolveFilter;
  pass.width=d.renderTargetWidth;pass.height=d.renderTargetHeight;pass.array_length=d.renderTargetArrayLength;pass.samples=d.defaultRasterSampleCount;
  if(d.visibilityResultBuffer) {
   if(![(id)d.visibilityResultBuffer isKindOfClass:[NBBuffer class]]){[self refuse:@"foreign visibility result buffer"];return nil;}
@@ -952,6 +1092,7 @@ static void scheduled(void *context);
 - (void)encodeWaitForEvent:(id<MTLEvent>)event value:(uint64_t)value {[self event:event value:value signal:false];}
 // The runtime has submitted the work. Deliver scheduling without waiting for GPU completion.
 - (void)didSchedule {
+ nmb_command_buffer_trace(_handle,32,0);
  {
   const uint64_t took=nowUs()-self.committedUs;
   std::lock_guard<std::mutex> lock(gCommitLock);
@@ -991,10 +1132,13 @@ static void scheduled(void *context);
  if(queue)dispatch_async(queue,run);else run();
 }
 - (void)commit {
+ houji_cpu_profile::windowClose();
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Commit);
  ScopedTimed measured(gTimeCommitCall);
  if(self.committed){NBLOG(@"native-metal: commit twice");return;}
  self.committed=YES;
  self.committedUs=nowUs();
+ nmb_command_buffer_trace(_handle,31,0);
  {
   std::lock_guard<std::mutex> lock(gCommitLock);
   // Assign once under the same lock as publication. A concurrent commit cannot reuse this index.
@@ -1018,22 +1162,29 @@ static void scheduled(void *context);
  dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT,0),^{[self finish];});
 }
 - (void)waitUntilCompleted {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Wait);
  if(!self.committed)return;
+ nmb_command_buffer_trace(_handle,40,0);
  const uint64_t began=nowUs();
  if(!self.failedLocally)nmb_command_buffer_wait(_handle,0);
  dispatch_group_wait(_handlers,DISPATCH_TIME_FOREVER);
  gTimeWaitCompleted.add(began);
+ nmb_command_buffer_trace(_handle,41,0);
 }
 - (void)waitUntilScheduled {
+ houji_cpu_profile::Scope profile(houji_cpu_profile::Wait);
  if(!self.committed)return;
+ nmb_command_buffer_trace(_handle,40,1);
  const uint64_t began=nowUs();
  bool scheduledOK=true;
  {ScopedTimed measured(gTimeWaitNative);if(!self.failedLocally)scheduledOK=nmb_command_buffer_wait_scheduled(_handle);}
  if(!scheduledOK){
+  nmb_command_buffer_trace(_handle,41,1);
   NBLOG(@"native-metal: waitUntilScheduled refused: %@",lastError());return;
  }
  {ScopedTimed measured(gTimeWaitHandlers);dispatch_group_wait(_schedulingHandlers,DISPATCH_TIME_FOREVER);}
  gTimeWaitScheduled.add(began);
+ nmb_command_buffer_trace(_handle,41,1);
 }
 @end
 static void scheduled(void *context) {[(__bridge NBCommandBuffer *)context didSchedule];}
@@ -1041,6 +1192,7 @@ static void scheduled(void *context) {[(__bridge NBCommandBuffer *)context didSc
 static void completed(void *context) {
  gCompleted++;
  NBCommandBuffer *commandBuffer=(__bridge_transfer NBCommandBuffer *)context;
+ nmb_command_buffer_trace(commandBuffer.handle,33,0);
  auto span=[](double start,double end)->int64_t {
   if(!std::isfinite(start) || !std::isfinite(end) || start<=0 || end<start || end-start>30)return -1;
   return (int64_t)((end-start)*1000000.0);
@@ -1049,6 +1201,12 @@ static void completed(void *context) {
  const int64_t submitUs=span(nmb_command_buffer_kernel_time(commandBuffer.handle,false),nmb_command_buffer_kernel_time(commandBuffer.handle,true));
  if(gpuUs>=0)gTimeGpuSpan.sample((uint64_t)gpuUs);else gGpuTimesUnavailable++;
  if(submitUs>=0)gTimeSubmitSpan.sample((uint64_t)submitUs);else gSubmitTimesUnavailable++;
+ if(gpuUs>=0)nmb_command_buffer_trace(commandBuffer.handle,34,(uint64_t)gpuUs);
+ if(submitUs>=0)nmb_command_buffer_trace(commandBuffer.handle,35,(uint64_t)submitUs);
+ nmb_command_buffer_trace(commandBuffer.handle,36,commandBuffer->encodedWork.drawUs);
+ nmb_command_buffer_trace(commandBuffer.handle,37,commandBuffer->encodedWork.endUs);
+ nmb_command_buffer_trace(commandBuffer.handle,38,commandBuffer->encodedWork.passUs);
+ nmb_command_buffer_trace(commandBuffer.handle,39,commandBuffer->encodedWork.draws);
  {
   const uint64_t took=nowUs()-commandBuffer.committedUs;
   gTimeEncodeToCommit.count++;gTimeEncodeToCommit.total+=took;
@@ -1065,7 +1223,10 @@ static void completed(void *context) {
 - (id<MTLCommandBuffer>)commandBuffer {
  NmbCommandBuffer *handle=nmb_command_buffer_new(_handle);
  if(!handle){NBLOG(@"native-metal: commandBuffer refused: %@",lastError());return nil;}
- NBCommandBuffer *commandBuffer=[NBCommandBuffer new];commandBuffer.handle=handle;commandBuffer.queue=self;return (id<MTLCommandBuffer>)commandBuffer;
+ NBCommandBuffer *commandBuffer=[NBCommandBuffer new];commandBuffer.handle=handle;commandBuffer.queue=self;
+ houji_cpu_profile::windowOpen();
+ nmb_command_buffer_trace(handle,30,0);
+ return (id<MTLCommandBuffer>)commandBuffer;
 }
 - (id<MTLCommandBuffer>)commandBufferWithUnretainedReferences {return [self commandBuffer];}
 - (void)setSubmissionQueue:(dispatch_queue_t)queue {(void)queue;}   // submission happens on the caller's thread here
@@ -1266,7 +1427,14 @@ static bool renderDescriptor(MTLRenderPipelineDescriptor *d,NmbRenderPipelineDes
 @end
 
 // Creation and archive population must use the same complete supported descriptor.
-static bool computeDescriptor(MTLComputePipelineDescriptor *d,NmbComputePipelineDescriptor *p,NSError **error) {
+static bool linkedHandles(NSArray<id<MTLFunction>> *functions,std::vector<NmbFunction *> &out) {
+ for(id<MTLFunction> f in functions){if(![(id)f isKindOfClass:[NBFunction class]])return false;out.push_back([(NBFunction *)f handle]);}
+ return true;
+}
+
+// The handles `p` points at live in `linked` and `privateLinked`, which outlive its use.
+static bool computeDescriptor(MTLComputePipelineDescriptor *d,NmbComputePipelineDescriptor *p,std::vector<NmbFunction *> &linkedStore,
+                              std::vector<NmbFunction *> &privateStore,NSError **error) {
  if(!d || ![(id)d.computeFunction isKindOfClass:[NBFunction class]]){if(error)*error=nbError(@"foreign compute function");return false;}
  // Metal may materialize empty stage/linked descriptors on access. Preserve the
  // default meaning while refusing state this frontend cannot yet represent.
@@ -1279,10 +1447,14 @@ static bool computeDescriptor(MTLComputePipelineDescriptor *d,NmbComputePipeline
  }
  if(!empty){if(error)*error=nbError(@"compute stage inputs are not implemented");return false;}
  MTLLinkedFunctions *linked=d.linkedFunctions;
- if(linked.functions.count || linked.binaryFunctions.count || linked.privateFunctions.count || linked.groups.count ||
-    d.preloadedLibraries.count || d.insertLibraries.count) {
-  if(error)*error=nbError(@"compute linked/dynamic libraries are not implemented");return false;
+ if(linked.binaryFunctions.count || linked.groups.count || d.preloadedLibraries.count || d.insertLibraries.count) {
+  if(error)*error=nbError(@"compute binary/grouped linked functions and dynamic libraries are not implemented");return false;
  }
+ if(!linkedHandles(linked.functions,linkedStore) || !linkedHandles(linked.privateFunctions,privateStore)) {
+  if(error)*error=nbError(@"foreign linked function");return false;
+ }
+ p->linked=linkedStore.data();p->linked_count=linkedStore.size();
+ p->private_linked=privateStore.data();p->private_linked_count=privateStore.size();
  p->function=[(NBFunction *)d.computeFunction handle];p->max_threads=d.maxTotalThreadsPerThreadgroup;
  p->multiple_of_execution_width=d.threadGroupSizeIsMultipleOfThreadExecutionWidth;p->indirect=d.supportIndirectCommandBuffers;
  p->max_call_stack_depth=d.maxCallStackDepth;p->adding_binary_functions=d.supportAddingBinaryFunctions;
@@ -1304,7 +1476,8 @@ static bool computeDescriptor(MTLComputePipelineDescriptor *d,NmbComputePipeline
  if(error)*error=nil;return YES;
 }
 - (BOOL)addComputePipelineFunctionsWithDescriptor:(MTLComputePipelineDescriptor *)d error:(NSError **)error {
- NmbComputePipelineDescriptor p={};if(!computeDescriptor(d,&p,error))return NO;
+ NmbComputePipelineDescriptor p={};std::vector<NmbFunction *> linked,privateLinked;
+ if(!computeDescriptor(d,&p,linked,privateLinked,error))return NO;
  if(!nmb_binary_archive_add_compute_descriptor(_handle,&p))return failWith<BOOL>(error,@"archive compute pipeline",NO);
  if(error)*error=nil;return YES;
 }
@@ -1455,6 +1628,7 @@ static bool pipelineArchives(NSArray *list,std::vector<NmbBinaryArchive *> &arch
  // the plane's own address and rows. Only a plain surface has no planes, and then only plane 0 exists.
  const size_t planes=surface?IOSurfaceGetPlaneCount(surface):0;
  if(!surface || !d || (planes?plane>=planes:plane!=0)){refuseSurface(1,surface,d,plane,0,0);return nil;}
+ const uint64_t rotation=textureRotation(d);if(rotation<5)gSurfaceRotations[rotation]++;
  if(planes)gSurfacePlanar++;
  void *base=IOSurfaceGetBaseAddress(surface);const size_t page=(size_t)getpagesize(),allocation=IOSurfaceGetAllocSize(surface);
  if(!page || (page&(page-1)) || !base || ((uintptr_t)base&(page-1)) || !allocation || allocation>SIZE_MAX-(page-1)){refuseSurface(2,surface,d,plane,(uintptr_t)base,0);return nil;}
@@ -1466,7 +1640,7 @@ static bool pipelineArchives(NSArray *list,std::vector<NmbBinaryArchive *> &arch
  NBTexture *texture=planes>=2?textureOnSurface(buffer,d,surface,plane,start-(uintptr_t)base,row):textureOnBuffer(buffer,d,start-(uintptr_t)base,row,true);
  if(!texture){refuseSurface(5,surface,d,plane,start-(uintptr_t)base,row);return nil;}
  gSurfaceTextures++;if(planes>=2 && (d.pixelFormat==550 || d.pixelFormat==551))gXrPlanarSurfaces++;
- texture.surface=(IOSurfaceRef)CFRetain(surface);return (id<MTLTexture>)texture;
+ texture.surface=(IOSurfaceRef)CFRetain(surface);[texture countUse];return (id<MTLTexture>)texture;
 }
 - (id<MTLLibrary>)newLibraryWithData:(dispatch_data_t)data error:(NSError **)error {
  const void *bytes=nullptr;size_t size=0;dispatch_data_t mapped=dispatch_data_create_map(data,&bytes,&size);
@@ -1508,7 +1682,8 @@ static bool pipelineArchives(NSArray *list,std::vector<NmbBinaryArchive *> &arch
 - (id<MTLComputePipelineState>)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d options:(MTLPipelineOption)options
                                                        reflection:(MTLAutoreleasedComputePipelineReflection *)reflection error:(NSError **)error {
  if(reflection)*reflection=nil;
- NmbComputePipelineDescriptor p={};if(!computeDescriptor(d,&p,error))return nil;
+ NmbComputePipelineDescriptor p={};std::vector<NmbFunction *> linked,privateLinked;
+ if(!computeDescriptor(d,&p,linked,privateLinked,error))return nil;
  std::vector<NmbBinaryArchive *> archives;
  if(!pipelineArchives(d.binaryArchives,archives,error))return nil;
  const NmbPipelineOptions creation={(uint64_t)options,archives.data(),archives.size()};
@@ -1538,25 +1713,46 @@ static bool pipelineArchives(NSArray *list,std::vector<NmbBinaryArchive *> &arch
  if(!handle)return failWith<id<MTLRenderPipelineState>>(error,@"render pipeline",nil);
  NBRenderPipeline *state=[NBRenderPipeline new];state.handle=handle;gPipelines++;if(error)*error=nil;return (id<MTLRenderPipelineState>)state;
 }
-// The asynchronous forms make the pipeline on the caller's thread and call the handler before returning, as the library's
-// newFunctionWithName:constantValues:completionHandler: does (RenderBox's pipeline loader, Core Image's bilateral solver).
+// Snapshot mutable descriptors before returning; retain functions and handlers
+// in the queued blocks. Synchronous entry points keep their existing behavior.
 - (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d completionHandler:(MTLNewRenderPipelineStateCompletionHandler)handler {
- NSError *error=nil;id<MTLRenderPipelineState> state=[(id<MTLDevice>)self newRenderPipelineStateWithDescriptor:d error:&error];
- handler(state,error);
+ MTLRenderPipelineDescriptor *snapshot=[d copy];
+ nbCompileAsync(NBCompileKind::Render, ^{
+  NSError *error=nil;id<MTLRenderPipelineState> state=[(id<MTLDevice>)self newRenderPipelineStateWithDescriptor:snapshot error:&error];
+  nbCompleteAsync(^{handler(state,error);});
+ });
 }
 - (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d options:(MTLPipelineOption)options
                            completionHandler:(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler {
- NSError *error=nil;id<MTLRenderPipelineState> state=[(id<MTLDevice>)self newRenderPipelineStateWithDescriptor:d options:options reflection:nil error:&error];
- handler(state,nil,error);
+ MTLRenderPipelineDescriptor *snapshot=[d copy];
+ nbCompileAsync(NBCompileKind::Render, ^{
+  NSError *error=nil;MTLRenderPipelineReflection *reflection=nil;
+  id<MTLRenderPipelineState> state=[(id<MTLDevice>)self newRenderPipelineStateWithDescriptor:snapshot options:options reflection:&reflection error:&error];
+  nbCompleteAsync(^{handler(state,reflection,error);});
+ });
 }
 - (void)newComputePipelineStateWithFunction:(id<MTLFunction>)function completionHandler:(MTLNewComputePipelineStateCompletionHandler)handler {
- NSError *error=nil;id<MTLComputePipelineState> state=[(id<MTLDevice>)self newComputePipelineStateWithFunction:function error:&error];
- handler(state,error);
+ nbCompileAsync(NBCompileKind::Compute, ^{
+  NSError *error=nil;id<MTLComputePipelineState> state=[(id<MTLDevice>)self newComputePipelineStateWithFunction:function error:&error];
+  nbCompleteAsync(^{handler(state,error);});
+ });
 }
 - (void)newComputePipelineStateWithFunction:(id<MTLFunction>)function options:(MTLPipelineOption)options
                           completionHandler:(MTLNewComputePipelineStateWithReflectionCompletionHandler)handler {
- NSError *error=nil;id<MTLComputePipelineState> state=[(id<MTLDevice>)self newComputePipelineStateWithFunction:function options:options reflection:nil error:&error];
- handler(state,nil,error);
+ nbCompileAsync(NBCompileKind::Compute, ^{
+  NSError *error=nil;MTLComputePipelineReflection *reflection=nil;
+  id<MTLComputePipelineState> state=[(id<MTLDevice>)self newComputePipelineStateWithFunction:function options:options reflection:&reflection error:&error];
+  nbCompleteAsync(^{handler(state,reflection,error);});
+ });
+}
+- (void)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d options:(MTLPipelineOption)options
+                          completionHandler:(MTLNewComputePipelineStateWithReflectionCompletionHandler)handler {
+ MTLComputePipelineDescriptor *snapshot=[d copy];
+ nbCompileAsync(NBCompileKind::Compute, ^{
+  NSError *error=nil;MTLComputePipelineReflection *reflection=nil;
+  id<MTLComputePipelineState> state=[(id<MTLDevice>)self newComputePipelineStateWithDescriptor:snapshot options:options reflection:&reflection error:&error];
+  nbCompleteAsync(^{handler(state,reflection,error);});
+ });
 }
 // SPI: a precompiled pipeline library (RenderBox.framework/default.pipelinelib) holds Apple GPU binaries. None is opened; the caller logs the
 // error and builds its pipelines from the shader library instead (RB::Device::render_pipeline_state).
@@ -1594,14 +1790,32 @@ static bool pipelineArchives(NSArray *list,std::vector<NmbBinaryArchive *> &arch
 @end
 
 // The device queries the runtime answers (nmb_device_answer_selector), as methods of the device class. One without an argument is read once
-// and installed only where the device has an answer of its own; one with an argument asks the runtime each call, and a refusal answers 0/NO
-// with the reason logged.
+// and installed only where the device has an answer of its own. Argument queries are fixed properties of the process's single gDevice.
+// Keep successful answers as in AdrenoMetal 31867dc8, without repeating the full family/format audit during every animation frame.
+// Failures still log and retry; the bounded cache does not change answers when full. Runtime calls never hold the cache lock.
 static std::unordered_map<SEL,uint64_t> gAnswers;
+static std::atomic<uint64_t> gAnswerHits{0},gAnswerMisses{0},gAnswerEntries{0};
 static NSUInteger countAnswer(id,SEL cmd) {return (NSUInteger)gAnswers.at(cmd);}
 static BOOL flagAnswer(id,SEL cmd) {return gAnswers.at(cmd)!=0;}
 static uint64_t askAnswer(SEL cmd,NSUInteger arg) {
+ static std::mutex lock;
+ static std::unordered_map<SEL,std::unordered_map<NSUInteger,uint64_t>> kept;
+ {
+  std::lock_guard<std::mutex> hold(lock);
+  auto answers=kept.find(cmd);
+  if(answers!=kept.end()) {
+   auto answer=answers->second.find(arg);
+   if(answer!=answers->second.end()){++gAnswerHits;return answer->second;}
+  }
+ }
+ ++gAnswerMisses;
  uint64_t value=0;
  if(!nmb_device_answer(gDevice,sel_getName(cmd),arg,&value)){NBLOG(@"native-metal: %s(%lu): %@",sel_getName(cmd),(unsigned long)arg,lastError());return 0;}
+ {
+  std::lock_guard<std::mutex> hold(lock);
+  // The installed selectors have small domains; arbitrary argument values must not grow the cache without bound.
+  if(gAnswerEntries.load()<1024 && kept[cmd].emplace(arg,value).second)++gAnswerEntries;
+ }
  return value;
 }
 static NSUInteger countArgAnswer(id,SEL cmd,NSUInteger arg) {return (NSUInteger)askAnswer(cmd,arg);}
@@ -1630,6 +1844,11 @@ extern "C" id native_bridge_metal_open(const char *loader,const char *cache,uint
  if(gDeviceObject)return gDeviceObject;
  gMissing=missing;gInFlight=[NSMutableSet set];
  gDevice=nmb_device_open(loader,cache);
+ if(gDevice && loader){
+  void *driver=dlopen(loader,RTLD_NOW|RTLD_LOCAL);
+  if(driver)gDriverCacheStats.store((void (*)(uint64_t *))dlsym(driver,"tu_darwin_bo_cache_stats"));
+  if(driver)gDriverCacheFitStats.store((void (*)(uint64_t *))dlsym(driver,"tu_darwin_bo_cache_fit_stats"));
+ }
  if(!gDevice){NBLOG(@"native-metal: device refused: %s",nmb_last_error());return nil;}
  if(!strcmp(getprogname(),"backboardd")){
   bool ok=nmb_device_native_astc_copy_check(gDevice);
@@ -1637,6 +1856,8 @@ extern "C" id native_bridge_metal_open(const char *loader,const char *cache,uint
   else NBLOG(@"native-metal: ASTC GPU copy check failed: %@",lastError());
  }
  if(cache){gJournalPath=std::string(cache)+"/pipelines.log";gJournalBegan=nowUs();}
+ houji_gpu_trace::start(cache);
+ houji_cpu_profile::start(cache);
  char name[128]={};nmb_device_name(gDevice,name,sizeof name);gName=[NSString stringWithUTF8String:name];gRegistryID=registryID;
  // The target families supportsFamily: answers true, with the rows of Apple's tables the device does not meet in them (nmb_device_family_waivers).
  {char waived[4096]={};nmb_device_family_waivers(gDevice,waived,sizeof waived);
@@ -1662,6 +1883,7 @@ extern "C" id native_bridge_metal_open(const char *loader,const char *cache,uint
  if(Protocol *spi=objc_getProtocol("MTLDeviceSPI"))class_addProtocol(cls,spi);
  objc_registerClassPair(cls);
  gDeviceObject=[cls new];
+ watchMemoryPressure();
  return gDeviceObject;
 }
 
@@ -1785,8 +2007,23 @@ extern "C" size_t native_bridge_metal_telemetry(char *out,size_t size) {
   (unsigned long long)gCompleted.load(),(unsigned long long)gPipelines.load(),(unsigned long long)gProblems.load(),(unsigned long long)gPasses.load(),
   (unsigned long long)gDraws.load(),(unsigned long long)gFullScreenPasses.load(),(unsigned long long)(gBiggestPass.load()>>10),
   (unsigned long long)gDispatches.load(),(unsigned long long)gBlits.load());
+ row("PR state=%u libraries=%u/%u pipelines=%u recent-commits=%u",
+  __atomic_load_n(&native_prime_compiling,__ATOMIC_RELAXED),__atomic_load_n(&native_prime_libraries_done,__ATOMIC_RELAXED),
+  __atomic_load_n(&native_prime_libraries_total,__ATOMIC_RELAXED),__atomic_load_n(&native_prime_made,__ATOMIC_RELAXED),
+  __atomic_load_n(&native_prime_rate,__ATOMIC_RELAXED));
+ row("PR functions-resumed=%u",__atomic_load_n(&native_prime_functions_resumed,__ATOMIC_RELAXED));
  row("T pipeline n=%llu total=%llums max=%llums",(unsigned long long)gTimePipeline.count.load(),ms(gTimePipeline.total.load()),ms(gTimePipeline.slowest.load()));
+ row("ASYNC function=%llu render=%llu compute=%llu compiled=%llu callbacks=%llu wait=%llums max=%llums",
+     (unsigned long long)gAsyncRequested[0].load(),(unsigned long long)gAsyncRequested[1].load(),
+     (unsigned long long)gAsyncRequested[2].load(),(unsigned long long)gAsyncCompiled.load(),
+     (unsigned long long)gAsyncCallbacks.load(),ms(gAsyncQueueWaitUs.load()),ms(gAsyncQueueWaitMaxUs.load()));
  row("XR pf553 pipelines=%llu failed=%llu two-plane-surfaces=%llu",(unsigned long long)gXr553Pipelines.load(),(unsigned long long)gXr553Failures.load(),(unsigned long long)gXrPlanarSurfaces.load());
+ row("TEX properties unoptimized=%llu swizzled=%llu views=%llu",(unsigned long long)gTextureUnoptimizedRequests.load(),(unsigned long long)gTextureSwizzledRequests.load(),(unsigned long long)gTextureSwizzledViews.load());
+ uint64_t patternProbe[2]={};nmb_pattern_probe_stats(patternProbe);
+ row("INIT green-marker=%llu plans=%llu",(unsigned long long)patternProbe[0],(unsigned long long)patternProbe[1]);
+ row("ANS hits=%llu misses=%llu entries=%llu",(unsigned long long)gAnswerHits.load(),
+     (unsigned long long)gAnswerMisses.load(),(unsigned long long)gAnswerEntries.load());
+ row("TU mode=%s flags=%s",houji_turnip::renderMode(),getenv("TU_DEBUG")?:"unset");
  row("T library n=%llu total=%llums max=%llums",(unsigned long long)gTimeLibrary.count.load(),ms(gTimeLibrary.total.load()),ms(gTimeLibrary.slowest.load()));
  row("T function n=%llu total=%llums max=%llums",
   (unsigned long long)gTimeFunction.count.load(),ms(gTimeFunction.total.load()),ms(gTimeFunction.slowest.load()));
@@ -1804,12 +2041,37 @@ extern "C" size_t native_bridge_metal_telemetry(char *out,size_t size) {
  uint64_t qos[6]={};nmb_thread_qos_stats(qos);
  row("QOS req%llu/%llu err%llu/%llu observed%llu/%llu",(unsigned long long)qos[0],(unsigned long long)qos[1],(unsigned long long)qos[2],(unsigned long long)qos[3],(unsigned long long)qos[4],(unsigned long long)qos[5]);
  row("A residency c%llu/r%llu scope-barrier c%llu/r%llu refused%llu",(unsigned long long)gResidencyCompute.load(),(unsigned long long)gResidencyRender.load(),(unsigned long long)gBarrierCompute.load(),(unsigned long long)gBarrierRender.load(),(unsigned long long)gResourceApiFailures.load());
+ row("BR resolve=%llu indirect=%llu pressure-freed=%llu rotations=%llu/%llu/%llu/%llu/%llu",
+  (unsigned long long)gResolveAttachments.load(),(unsigned long long)gIndirectDispatches.load(),(unsigned long long)gPressureFreed.load(),
+  (unsigned long long)gSurfaceRotations[0].load(),(unsigned long long)gSurfaceRotations[1].load(),(unsigned long long)gSurfaceRotations[2].load(),
+  (unsigned long long)gSurfaceRotations[3].load(),(unsigned long long)gSurfaceRotations[4].load());
+ row("SU count-use added=%llu removed=%llu",(unsigned long long)gSurfaceUseAdded.load(),(unsigned long long)gSurfaceUseRemoved.load());
  row("J surface cache n=%llu bytes=%llu dup=%llu us=%llu max=%llu",(unsigned long long)gTimeSurfaceFlush.count.load(),
   (unsigned long long)gSurfaceFlushBytes.load(),(unsigned long long)gSurfaceFlushDuplicates.load(),
   (unsigned long long)gTimeSurfaceFlush.total.load(),(unsigned long long)gTimeSurfaceFlush.slowest.load());
  row("N no-copy %llu dealloc %llu/%llu surface %llu/%llu",(unsigned long long)gNoCopyAll.load(),(unsigned long long)gNoCopyReleased.load(),
   (unsigned long long)gNoCopyMade.load(),
   (unsigned long long)gSurfaceImportsReleased.load(),(unsigned long long)gSurfaceImportsMade.load());
+ {
+  uint64_t values[6]={};
+  if(nmb_no_copy_remaps(values)){
+   row("VM ranges=%llu remapped=%llu queries=%llu unknown=%llu",(unsigned long long)values[0],
+    (unsigned long long)values[1],(unsigned long long)values[2],(unsigned long long)values[3]);
+   row("VM query total-us=%llu max-us=%llu",(unsigned long long)values[4],(unsigned long long)values[5]);
+  }
+ }
+ {
+  // Optional entry point from the matched Turnip bundle. The driver reports
+  // atomics, so telemetry cannot hold the allocator's retirement lock.
+  auto cacheStats=gDriverCacheStats.load();
+  uint64_t stats[8]={};
+  if(cacheStats){cacheStats(stats);row("BO reuse %llu/%llu put%llu evict%llu flush%llu bytes%llu peak%llu entries%llu",
+   (unsigned long long)stats[1],(unsigned long long)stats[0],(unsigned long long)stats[2],(unsigned long long)stats[3],
+   (unsigned long long)stats[4],(unsigned long long)stats[5],(unsigned long long)stats[6],(unsigned long long)stats[7]);}
+  auto fitStats=gDriverCacheFitStats.load();uint64_t fit[4]={};
+  if(fitStats){fitStats(fit);row("BO fit rounded%llu larger%llu new%llu bytes%llu",
+   (unsigned long long)fit[0],(unsigned long long)fit[1],(unsigned long long)fit[2],(unsigned long long)fit[3]);}
+ }
  // The runtime's VkPipeline makings (the creation log, METAL2VULKAN_LOG_PIPELINES; they happen at draws, not at the state's creation) and
  // its shader cache: where the driver's compile time goes.
  uint64_t work[10]={};

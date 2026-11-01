@@ -188,6 +188,33 @@ pub(crate) use attached_reads::feedback_candidate;
 pub use shared::SharedTextureHandle;
 pub use wrapped::{VkImageLayouts, WrappedImageProblem};
 
+// Opt-in diagnostic, never an ordinary rendering policy. Change only the
+// initial pattern of new optimized private 8-bit colour textures. If a UI
+// defect follows this marker, an unwritten initial texel reached that UI.
+// Written texels, clears, imported surfaces, depth and other formats keep
+// their original behavior. The builder gives this variant a distinct ID.
+static HOUJI_PATTERN_PROBE_PLANS: AtomicU64 = AtomicU64::new(0);
+fn houji_pattern_probe_enabled() -> bool {
+    matches!(option_env!("HOUJI_DIAGNOSTIC_FRESH_PATTERN"), Some("green"))
+}
+fn houji_pattern_probe(
+    pf: PixelFormat, levels: u32, pattern: heap_tiled::FreshPattern,
+) -> heap_tiled::FreshPattern {
+    if levels != 0 && houji_pattern_probe_enabled() && matches!(pf,
+        PixelFormat::RGBA8Unorm | PixelFormat::RGBA8UnormSRGB |
+        PixelFormat::BGRA8Unorm | PixelFormat::BGRA8UnormSRGB)
+    {
+        HOUJI_PATTERN_PROBE_PLANS.fetch_add(1, Ordering::Relaxed);
+        return heap_tiled::FreshPattern::Color {
+            texel: &[0, 255, 0, 255], color: Some([0.0, 1.0, 0.0, 1.0]),
+        };
+    }
+    pattern
+}
+pub(crate) fn houji_pattern_probe_statistics() -> [u64; 2] {
+    [houji_pattern_probe_enabled() as u64, HOUJI_PATTERN_PROBE_PLANS.load(Ordering::Relaxed)]
+}
+
 /// The kind of multisample image [`TextureState::sample_moves`] answers for.
 pub(super) type SampleMovesKey = (Format, PixelFormat, ImageUsageFlags, SampleCountFlags);
 
@@ -3273,6 +3300,7 @@ impl Device {
         if levels == 0 {
             return Ok(None);
         }
+        let pattern = houji_pattern_probe(pf, levels, pattern);
         let single = layout.samples == 1 && plan.usage.contains(ImageUsageFlags::TRANSFER_DST);
         let copies = |texel: &'static [u8]| -> Result<Pattern, Error> {
             let units = copy_units(plan.format, pf);

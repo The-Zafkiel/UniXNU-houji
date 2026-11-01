@@ -6,7 +6,7 @@
 
 Snapdragon 8 Gen 3 · Adreno 750 · Darwin 22
 
-[功能状态](#功能状态) · [开发指南](docs/development.md) · [代码结构](docs/architecture.md) · [问题反馈](https://github.com/lonzzi/UniXNU-houji/issues)
+[功能状态](#功能状态) · [性能修复](docs/performance.md) · [待完成项](docs/roadmap.md) · [开发指南](docs/development.md) · [代码结构](docs/architecture.md) · [问题反馈](https://github.com/lonzzi/UniXNU-houji/issues)
 
 </div>
 
@@ -33,18 +33,39 @@ Snapdragon 8 Gen 3 · Adreno 750 · Darwin 22
 | --- | --- | --- |
 | UEFI 与系统启动 | 可用 | 已实机进入锁屏、桌面和设置 |
 | CPU 多核 | 可用 | 八核启动，适配大小核分组与调度 |
-| CPU / GPU 调频 | 实验性 | 使用厂商频点表；温度反馈和热保护尚未验证 |
+| CPU / GPU 调频 | 实验性 | 使用工厂频率表、负载与触控提示，已有 TSENS 结温限制；持续性能和完整热保护待完善 |
 | 显示与触控 | 可用 | 原生分辨率、全屏触控、返回与最近任务手势 |
 | 系统键盘 | 可用 | 设置、主屏搜索、App 资源库的宽度适配 |
 | UFS 系统卷 | 可用 | 当前开发配置使用 32 GiB HFSX 卷 |
 | Adreno 图形加速 | 部分可用 | 已有真实命令提交、GPU 写回和桌面渲染；掉帧、紫色阴影、文字异常仍待修复 |
-| 墙纸与照片 | 部分可用 | 墙纸内容可部分显示，预览及照片应用仍不稳定 |
-| 日志与恢复 | 可用 | 保存带校验的检查点，返回 OrangeFox 后读取；早期硬件锁死仍可能需要手动重启 |
+| 墙纸与照片 | 不完整 | 墙纸预览不稳定；照片应用存在图库初始化失败导致的黑屏，兼容修复待实机验证 |
+| 日志与恢复 | 可用 | [采集工具](docs/log-capture.md)保存原始分区、校验检查点并比较本轮应用崩溃报告；早期锁死仍可能漏记 |
 | Wi-Fi / 蓝牙 / 蜂窝 | 待适配 | 尚未完成可用性验证 |
-| 声音 / 亮度 / 充电管理 | 待适配 | Recovery 中工作不代表 iOS 驱动已经可用 |
+| 亮度 | 调节初步可用 | 已实机验证亮度响应；完整亮度范围与熄屏/唤醒仍待验证 |
+| 电量与 USB 充电状态 | 基础功能可用 | 经原厂 ADSP/PMIC GLINK 读取真实电量，已验证插拔状态切换；充电控制、电流和电池温度保护待完善 |
+| 声音 | 待适配 | ADSP 通信已接通；GPR、AudioReach、WCD939x 与双 CS35L41 音频路由尚未完成 |
 | Safari 等应用 | 待验证 | 依赖网络和图形兼容性继续完善 |
+| 系统应用 | 已恢复，部分实测 | 已恢复并验证 32 个应用的注册；计算器、时钟、图书和音乐可打开。音乐播放尚未验证，提醒事项图标异常暂未复现，见[系统应用恢复](docs/system-apps.md) |
 
 软件刷新通知已尝试提高到 120 Hz，**这不代表面板已在 120 Hz 扫描，也不代表桌面能达到 120 FPS**。当前优化重点是渲染正确性、提交开销和显示输出路径。
+
+## 性能修复与待完成项
+
+当前实现包含 128 段 GPU 批量提交、每次启动自检后启用的缓存一致性优化、缓冲区复用、显示完成唤醒和交互调频。桌面滑动与最近任务曾有实机改善，但**开关应用动画仍卡顿，紫色阴影、偶发文字异常和滑动撕裂尚未解决**。提交、映射和合成线程采样用于定位这些问题；主机检查或单项耗时下降不代表端到端帧率提升。
+
+当前优先工作：
+
+- [ ] 缩短冷启动、连续操作和静置后开关应用的延迟，补齐呈现帧间隔测量。
+- [ ] 修复紫色阴影、文字纹理错误、壁纸黑闪与滑动撕裂，验证透明混合和显示同步。
+- [ ] 完成 GPU 地址空间、内存压力及 shader 兼容性验证。主客户端已有 2 GiB 窗口，详见 [GPU 地址空间](docs/gpu-address-space.md)。
+- [ ] 修复照片图库初始化，完成墙纸、其余系统应用和扩展的功能验证。
+- [ ] 降低持续交互发热，补齐电流、电池温度保护及充电控制，详见 [电池接入](docs/battery.md)。
+- [ ] 完成亮度范围、熄屏/唤醒、音频与无线网络适配。
+- [ ] 完善冷启动恢复和全新环境中的完整构建流程。
+
+实现原理与上游来源见 [性能说明](docs/performance.md)，逐轮设备观察与未通过项见 [设备测试](docs/device-tests.md)。
+
+每项的依赖、下一步和验收条件列在 [待完成项](docs/roadmap.md)，其他开源移植的实际采用范围见 [跨项目对照](docs/upstream-features.md)。小米官方及社区设备树的核对、X4 boost 与 DSI 后续修正见 [设备树对照](docs/device-tree.md)。其他机型的实现用于参考，其实测结果不代表小米 14 已支持对应功能。
 
 ## 开发
 
@@ -57,7 +78,7 @@ python3 tools/check-source-tree.py
 python3 tools/run-host-checks.py
 ```
 
-离线检查验证频点策略、HFI 数据和缓冲区回收的已知回归，不模拟手机或 GPU。源码组装、构建依赖及实机验证流程见 [开发指南](docs/development.md)。
+离线检查验证频点策略、HFI、实际提交/页表代码、显示队列、预热调度及缓冲区回收的已知回归，不模拟手机或 GPU。源码组装、构建依赖及实机验证流程见 [开发指南](docs/development.md)。
 
 ## 代码导航
 
@@ -80,6 +101,6 @@ python3 tools/run-host-checks.py
 
 ## 致谢与许可
 
-感谢 [UniXNU](https://github.com/UniXNU)、[Mu-Silicium](https://github.com/Project-Silicium/Mu-Silicium)、[Apple Open Source](https://github.com/apple-oss-distributions/xnu)、[Mesa](https://mesa3d.org/)、[AdrenoMetal](https://github.com/UniXNU/AdrenoMetal)、[metal2vulkan](https://github.com/steelbrain/metal2vulkan)，以及 [sheng](https://github.com/UniXNU/UniXNU-sheng)、[一加 Ace 5](https://github.com/tycykp/UniXNU-OnePlus-Ace5)、[小米 17 Pro](https://github.com/ShueiTsuki/data-a-live)、[小米 13 Ultra](https://github.com/markakash/UniXNU-ishtar-old) 等移植项目提供的实现和调查资料。
+感谢 [UniXNU](https://github.com/UniXNU)、[Mu-Silicium](https://github.com/Project-Silicium/Mu-Silicium)、[Apple Open Source](https://github.com/apple-oss-distributions/xnu)、[Mesa](https://mesa3d.org/)、[AdrenoMetal](https://github.com/UniXNU/AdrenoMetal)、[metal2vulkan](https://github.com/steelbrain/metal2vulkan)，以及 [HackiOS](https://github.com/oosexgang/hakios-xnu-kernel)、[ios-sweet](https://github.com/dipa-studio/ios-sweet)、[sheng](https://github.com/UniXNU/UniXNU-sheng)、[一加 Ace 5](https://github.com/tycykp/UniXNU-OnePlus-Ace5)、[小米 17 Pro](https://github.com/yechenan/data-a-live)、[Nothing Phone (3a)](https://github.com/rootstockos/UniXNU-asteroids)、[小米 13 Ultra](https://github.com/markakash/UniXNU-ishtar-old) 等移植项目提供的实现和调查资料。
 
 本仓库包含多种许可证的代码，保留各文件及上游原有条款。详见 [COPYING.md](COPYING.md)。

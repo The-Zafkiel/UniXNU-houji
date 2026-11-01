@@ -26,13 +26,91 @@ Qualcomm bootloader
 - `bootloader/` 对应 DarwinBoot 的固定版本补丁与新增头文件。
 - `graphics/metal/` 是当前使用的 Objective-C++ / Rust 桥接源码；`graphics/include/` 保存共享 ABI、PM4 辅助代码及自有测试 shader。
 - `graphics/runtime/overlay/` 是固定版本 metal2vulkan 的替换文件，不是完整依赖副本。
+- 运行时版本由 `sources.lock.json` 固定；覆盖文件保留本机适配。`tools/build-metal.py` 校验源码身份并使用桥接 Cargo 锁构建。
 - `graphics/turnip/` 包含 Mesa 修改以及 Darwin 内核后端，含 BO 释放顺序修复。
 - `userland/` 保存键盘几何等适配。显示驱动的当前有效版本以 `kernel/` 为准，用户空间目录内的显示调查副本供对照参考。
+- `userland/apps/` 保存原版系统应用的安装清单和一次性注册程序；离线迁移、启动接入及验证边界见[系统应用恢复](system-apps.md)。仓库不包含原版应用文件。
 
 `sources.lock.json` 固定上游提交；`source-manifest.json` 固定本次发布的文件校验和。更新源码后应同步更新清单，不能只修改历史实验中的同名副本。
 
+## GPU 内存与提交
+
+NativeAdreno 使用共享 GPU 地址空间和五个客户端槽位，主合成客户端窗口为 2 GiB，
+对象上限为 4,096。Preferences 使用独立的第五槽位，需要配套的
+`graphics/metal/NativeAdrenoMetal.clients`。内核句柄索引加快对象查找，仍保留
+调用者、权限、范围和生命周期检查。地址布局与限制见 [GPU 地址空间](gpu-address-space.md)。
+
+提交 ABI 通过能力查询选择：旧接口最多 16 段、结构 416 字节，新接口最多 128 段、
+结构 3,104 字节。扩展批量大小不改变 fence、缓存维护或资源退休条件。
+
+内核页池与 Turnip 整块 BO 缓存分别保留物理页和完整映射。后者限于 128 项、64 MiB、
+单块 8 MiB；只接收已经完成的自有分配，排除主机导入、共享、可回放和固定地址资源。
+尺寸按上游规则分档，在相同权限下选择不小于请求且最多大四分之一的最小条目。
+逻辑长度与实际分配长度分别保存，CPU 映射检查、清零、退休和 IOVA 释放使用实际长度。
+内存压力和分配失败触发有界清退，失败释放的资源不得重新使用。
+
+主机内存导入使用原调用者 task 固定页面。GPU 未完成时释放 issuer 锁睡眠，保留
+mutation reservation；重新取得锁并确认可执行后，仍检查设备静止及 VM 状态。
+超时、关闭、停机或导入失败均不重试已执行的固定页面操作。
+
+Metal no-copy 桥接检查 VM 对象及偏移，避免同一虚拟地址重新映射后继续使用旧页面。
+检查在固定页面前后进行，兼顾写时复制；记录最多 8,192 项，单次最多遍历 4,096 个区域。
+未知身份使复用失效，旧资源仍由原命令生命周期持有。
+
+## 缓存一致性与完成同步
+
+桌面测试模式在每次启动执行双向 CP 拷贝和八次固定图像回读，全部通过才为符合条件的
+WB / inner-shareable 导入启用一致性优化。其他映射继续维护缓存。自检失败不发布该快路。
+这是有界启动资格检查，不替代完整 IOSurface、shader 或颜色正确性验证。
+
+SMMU 撤销使用 ASID invalidate 和 TLBSYNC；周期检查核对路由及 context 冲突，
+初次附着和显式审计仍遍历完整页表，每次事务仍验证变更叶子。
+
+pending fence 的锁外读取只提供“仍未完成”的提示。完成字必须先验证精确 PA 与
+Normal-NC 映射；真正完成、超时或资格不足时仍取得 issuer 锁验证。
+设备停止撤销提示资格，不跳过错误传播和退休检查。
+
+## 显示与交互调度
+
+当前显示路径通过 CPU 复制 framebuffer。已有原生调用观察到 fence 推进时唤醒复制线程，
+等待预算为 8.333 ms；唤醒后重新检查 producer 和当前 tail，复制期间持有 issuer 锁。
+该路径没有新增 GPU IRQ 或面板 vblank 同步。软件 120 Hz 通知不代表面板扫描或桌面 FPS。
+
+CPU/GPU 使用本机工厂表和有效热上限。CPU 交互下限要求近期域负载，后台不维持额外下限。
+GPU 仅对空闲至少 80 ms 后的新触控段，在报告不足 50 ms 时请求短时预升频；连续事件不续期。
+HFI 确认、频率表校验及 TSENS 结温限制保持优先。机身、电池温控与紧急关机尚不完整。
+
+## 电池与系统服务
+
+`kernel/overlay/iokit/Kernel/houji-ufs-root/battery/` 包含 ADSP、PMIC GLINK 协议及
+`IOPMPowerSource` 实现。当前仅在显式 `houji_battery_probe=4` 模式启动。
+固件从本机校验范围内的 `modem_a` 读取，资源来自本机设备树；电池通路只读标准属性。
+真实电量与 USB 插拔状态已经实机验证，充电器设置未接入。详见 [电池接入](battery.md)。
+
+所有本机驱动编入内核，SWEET 目标启用 `no_kextd`，避免等待当前 iOS 根卷不存在的
+macOS IOKit daemon。普通服务匹配和 busy 状态保留。`HoujiNetworkStack.cpp` 提供
+InterfaceNamer 服务的受限入口，尚未实现接口命名，也不代表 Wi-Fi 已适配。
+
+Metal 对象提供稳定的 `globalTraceObjectID`，命令缓冲提供实例独有的 `userDictionary`。
+这些接口用于上层兼容，不改变 GPU 地址或同步语义，未知 selector 仍报错。
+
+系统应用恢复保留原版 bundle 内容和所有权，由一次性服务完成注册。AMFI 的 dyld 路径
+兼容仅允许清单中的平台应用展开包内路径。TCC 兼容仅覆盖 tccd 的精确 MediaLibrary /
+Photos 文件扩展调用，并保留原授权判断；当前 SWEET 无沙箱隔离，不能据此宣称完整权限
+隔离已实现。接口范围和设备验证状态见 [系统应用](system-apps.md)。
+
+## 诊断与验证
+
+`NativeAdrenoLatency.h` 区分锁等待、board gate、core dispatch 及其他耗时，保留有界慢调用。
+固定日志前缀保存 GPU、VM、显示、调频和服务计数，避免退出消息覆盖关键证据。
+可选 CPU 采样器观察 backboardd 合成线程；采样会暂停线程，需在结果中说明其扰动。
+
+[主机检查](development.md)验证实际代码的 ABI、边界、并发和错误路径；
+[设备测试](device-tests.md)记录日志校验、场景与用户观察。GPU 命令时间、软件刷新次数及
+主机测试均不能单独证明端到端帧率或画面正确性。
+
 ## 历史资料
 
-`archive/native`、`archive/scripts`、`archive/tests` 和 `archive/docs` 保留早期实验及来源，便于了解寄存器、接口和故障的调查过程。其中脚本已将原开发者路径替换为占位符，含有旧镜像、分区布局和校验绑定，不能作为当前安装器直接运行。
-
-当前启动基线对应开发镜像 r222。该标识用于关联本地证据，不是发行版本；没有全新环境完整构建和通用刷机流程的保证。
+`archive/` 保留早期实验与调查资料，不是默认构建入口。其中脚本可能绑定旧镜像、分区
+布局和工具链，应按当前开发指南重新核对依赖。设备测试编号用于关联证据，不是发行版本；
+项目尚未提供经过全新环境验证的通用刷机流程。

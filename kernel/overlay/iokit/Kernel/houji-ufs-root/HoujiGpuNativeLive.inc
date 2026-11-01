@@ -98,10 +98,11 @@ static int houjiCpKeepLive(void*,hhr_result*r){
 }
 static int houjiFullKeepLive(void*){return gHoujiLive.requested && gHoujiLive.retained && gHoujiLive.coexist && !gHoujiLive.code && !houjiSubmitGuard() && houjiVmIdle() && houjiFullLease() && houjiFullTables()?1:0;}
 #include "HoujiGpuNativeProvider.inc"
+#include "HoujiGpuCoherenceProbe.inc"
 #include "HoujiGpuProbeLog.inc"
 static void houjiLiveDeadline(void*,wait_result_t){
  thread_set_thread_name(current_thread(),"houji-gpu-guard");uint64_t began=houjiSubmitNow(nullptr);
- while(houjiSubmitNow(nullptr)-began<(gHoujiLive.mode==3?420000000ull:360000000ull))IOSleep(1000);
+ while(houjiSubmitNow(nullptr)-began<(gHoujiLive.mode==3?210000000ull:360000000ull))IOSleep(1000);
  /* Independent of provider/VFS locks. All device resources remain pinned;
   * the host prearmed recovery BCB. Panic recovery does no filesystem I/O. */
  native_adreno_provider_snapshot();panic("HOUJI LIVE: independent runtime deadline; retained resources, PSCI-only recovery, no FS");
@@ -134,9 +135,13 @@ static void houjiLiveWorker(void*,wait_result_t){
     if(!observed && stats[0] && !first_draw){first_draw=now;first_fence=stats[4];}
     if(!observed && stats[2]){l.code=15;break;}
     if(now-last_desktop_save>=20000000){houji_touch_driver_report();houji_managed_physical_map_debug_report();houjiProviderPerfReport();native_adreno_provider_snapshot();if(houjiNativeGpuFsAllowed())houji_ufs_checkpoint("desktop actual-submit/fence/display sampling; no GPU gate held",0);last_desktop_save=now;}
-    if(first_draw && now-first_draw>=120000000 && !observed && stats[0]>=64 && stats[4]>=first_fence+32 && presents-base_presents>=30){IOLog("HOUJI DESKTOP: GPU and display activity sampling complete; physical UI confirmation still required\n");break;}
+    /* Short interaction trials after r242's measured thermal limiting. Keep
+     * two minutes after first draw, with a three-minute worker ceiling and
+     * independent 210-second recovery guard. This does not qualify complete
+     * shader priming or sustained thermal performance. */
+    if(first_draw && now-first_draw>=120000000 && !observed && stats[0]>=64 && stats[4]>=first_fence+32 && presents-base_presents>=30){IOLog("HOUJI DESKTOP: short GPU/display sampling complete; physical UI confirmation still required\n");break;}
    }
-   if(now-started>=360000000)break;
+   if(now-started>=180000000)break;
   }else if(l.mode==2){
    probe_state=native_adreno_provider_probe_result();
    /* The per-boot started flag proves this process cleared the previous log.
@@ -158,6 +163,7 @@ static void houjiLiveWorker(void*,wait_result_t){
 }
 static bool houjiLiveStart(void){
  if(!houjiFullKeepLive(nullptr))return false;
+ if(gHoujiLive.mode==4 || gHoujiLive.mode==5)houjiCoherenceTrial();
  if(houjiProviderStart())return false;
  houjiDvfsStart();
  IOLog("HOUJI LIVE COMMIT: exact retained handoff and coexistence before userland; completed=%u real jobs\n",gHoujiSubmit.completed);

@@ -6,7 +6,8 @@
 // Metal frontend's device (the metal2vulkan runtime on Turnip, on the Adreno 740), which the original discovery registers; the CARenderServer then
 // renders the system UI through it, and the display driver's frames are written to the scanout by the GPU (GpuScanoutClient.h). Another process
 // gets its own native device (its own driver connection, GPU address window and shader cache) when its name is listed in the file
-// NativeAdrenoMetal.clients beside the bundle ("*" lists every process); an unlisted one returns nil and keeps the software renderer.
+// NativeAdrenoMetal.clients beside the bundle ("*" lists every process); an unlisted one returns nil. A caller may fall back to OpenGL,
+// which is not implemented here; returning nil does not guarantee a working software renderer (Preferences notification icons).
 #import <Foundation/Foundation.h>
 #include <pthread.h>
 #include <dlfcn.h>
@@ -21,6 +22,7 @@
 #include "CacheExport.h"
 #include "PrimeShaders.h"
 #include "ExceptionDiag.h"
+#include "NativeTurnipPolicy.h"
 
 @interface _MTLDevice : NSObject
 @end
@@ -183,12 +185,16 @@ static id deviceForPort(unsigned port) {
         if (tried) return device;
         tried = true;
         exceptiondiag::start(); // the throw site of an uncaught exception, for the kernel's THROW row (ExceptionDiag.h)
-        // Every Metal process renders in system memory: Turnip's GMEM passes hand work between the BV and BR threads, and with IFPC off
-        // and a context reset on every client switch the two still stopped waiting on each other inside a pass (int-261p, int-262: GPU idle,
-        // BR one IB ahead, BV inside a draw IB2). int-257's nobin covered the render server only. System memory alone still let BV run
-        // ahead of BR across passes (concurrent binning is emitted for sysmem passes too) and it hung the same way in int-265: no
-        // concurrent binning either.
-        setenv("TU_DEBUG", "sysmem,nocb", 0);
+        // The default retains the established system-memory path. A comparison
+        // build may let Turnip select GMEM; both defaults disable concurrent
+        // binning, including the binning emitted for system-memory passes.
+        houji_turnip::configure();
+#if HOUJI_GPU_STAGE_TRACE
+        if (!strcmp(getprogname(), "backboardd")) setenv("HOUJI_GPU_TRACE", "1", 1);
+        else unsetenv("HOUJI_GPU_TRACE");
+#else
+        unsetenv("HOUJI_GPU_TRACE");
+#endif
         if (strcmp(getprogname(), "backboardd") != 0) return device = clientDevice(port);
         // The discovery releases the accelerator port when it is done; the monitor and the scanout client keep using it.
         if (void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL)) {
@@ -352,7 +358,7 @@ static id deviceForPort(unsigned port) {
         pthread_attr_setstacksize(&attributes, 8u << 20);
         pthread_t primer;
         char primePath[1024];
-        if(requestedPath("NativeAdrenoMetal.primelist",primePath,sizeof primePath)){
+        if(requestedPath("NativeAdrenoMetal.primelist",primePath,sizeof primePath) || !prime::embeddedLines().empty()){
         pthread_create(&primer, &attributes, [](void *) -> void * {
             char list[1024];
             prime::run((id<MTLDevice>)device, gCacheDirectory, 90,
@@ -375,7 +381,7 @@ static id deviceForPort(unsigned port) {
     // is an A740 raw-PM4 replay and is not a valid A750 discovery operation.
     // The existing clients file explicitly selects consumers, including backboardd.
     // A failed Turnip/backend open returns nil and leaves software rendering available.
-    setenv("TU_DEBUG", "sysmem,nocb", 0);
+    houji_turnip::configure();
     if(!publish::listedClient())return nil;
     if(!strcmp(getprogname(),"backboardd")){
         CFPreferencesSetAppValue(CFSTR("CAEnableDeepFramebuffer"),kCFBooleanFalse,kCFPreferencesCurrentApplication);

@@ -459,8 +459,7 @@ calls! {
     // A batch's first work: the clear of a neutral depth image, which may be multisampled
     // (`texture/first_move.rs`, `neutral.rs`).
     CmdClearDepthStencilImage => c"vkCmdClearDepthStencilImage",
-    // An encoder's commands, which a deferred command buffer's replay records (`recorder`): those
-    // no host step records.
+    // An encoder's commands that no host step records, primed with the rest.
     CmdBlitImage => c"vkCmdBlitImage",
     CmdUpdateBuffer => c"vkCmdUpdateBuffer",
     CmdFillBuffer => c"vkCmdFillBuffer",
@@ -900,8 +899,7 @@ where
 /// with the utilization floor at its top on Linux, from its start ([`run_at_user_interactive`]):
 /// the scheduler's (`scheduler/`), each `VkQueue`'s waiter, which makes the completion turns
 /// (`command_buffer/completion.rs`), every thread of the handler
-/// pool (`contexts/`), the device's recorder and lowering threads (`recorder`,
-/// `render/lowering_worker.rs`), and a predicated loop's check's (`command_buffer/rerun.rs`),
+/// pool (`contexts/`), the device's lowering thread (`render/lowering_worker.rs`), and a predicated loop's check's (`command_buffer/rerun.rs`),
 /// whose work the program's command buffers wait for. A thread one
 /// of them starts (the reaper a pipeline state's last release
 /// starts on a handler thread, a program's thread made in a handler) does not take either: it
@@ -1002,6 +1000,21 @@ pub(crate) fn raise_to_user_initiated() {
 /// Nothing: no quality of service class here ([`raise_to_user_initiated`] on macOS).
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) fn raise_to_user_initiated() {}
+
+/// Lower this thread to the utility quality of service: a warm pass's thread (`warm/pass.rs`),
+/// whose translations nothing waits for. Its pipeline makings still compile at the
+/// user-initiated class, on a thread of their own (`device/compiles.rs`), and a thread it starts
+/// starts at the default class ([`spawn`]).
+#[cfg(target_os = "macos")]
+pub(crate) fn lower_to_utility() {
+    // SAFETY: sets the calling thread's own class; no pointer.
+    unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) };
+}
+
+/// Nothing elsewhere: a Linux thread's nice value passes to the threads it starts, and the warm
+/// pass starts the pipeline pool's, which serve the program ([`lower_to_utility`] on macOS).
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn lower_to_utility() {}
 
 /// Run this thread at the user-interactive quality of service, whatever its class: a thread of
 /// the runtime's own that takes command buffers to their handlers ([`spawn_user_interactive`]).

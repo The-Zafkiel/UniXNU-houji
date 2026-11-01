@@ -38,6 +38,7 @@ extern const uint8_t verified_root_key[];
 #include "TransferPoll.h"
 #include "GiuliaSmmuTakeover.h"
 #include "HoujiCpuFrequency.h"
+#include "HoujiBatterySurvey.inc"
 
 static UfsRootDiagnostics gRootDiagnostic;
 static bool gRootDiagnosticEnabled;
@@ -317,6 +318,8 @@ static bool hostBringUp (const char **why)
 #include "HoujiLogFile.h"
 #include "HoujiLogCommit.h"
 #include "HoujiRootWindow.h"
+#include "HoujiFirmwareUfs.inc"
+#include "HoujiFirmwareProbe.inc"
 
 extern "C" bool bsd_log_lock(bool);
 extern "C" void bsd_log_unlock(void);
@@ -360,8 +363,18 @@ static IOReturn flushLog(void) {
   return r;
 }
 extern "C" unsigned houji_gpu_cached_timing(char *,unsigned);
+extern "C" unsigned houji_framebuffer_snapshot(char *,unsigned);
+extern "C" unsigned houji_display_timing_snapshot(char *,unsigned);
+extern "C" unsigned houji_sample_snapshot(char *,unsigned);
+extern "C" unsigned houji_network_stack_snapshot(char *,unsigned);
+extern "C" unsigned houji_cpu_dvfs_snapshot(char *,unsigned);
+extern "C" unsigned houji_adsp_snapshot(char *,unsigned);
 static const char *saveNativeLog(void) {
   static uint8_t metadata[7*4096],image[65536];
+  constexpr unsigned gpuCapacity=20480,displayCapacity=4096,sampleCapacity=12800;
+  constexpr unsigned networkCapacity=512,cpuCapacity=1024,batteryCapacity=2048,panelCapacity=4096;
+  static_assert(sizeof(gNativeText)+gpuCapacity+displayCapacity+sampleCapacity+
+    networkCapacity+cpuCapacity+batteryCapacity+panelCapacity+128<sizeof(image)-4096,"snapshot prefixes exceed existing log file");
   nativeStage("logfs metadata read");
   for(unsigned i=0;i<7;i++)
     if(hostRead4k(0,4096+i,1,metadata+i*4096)!=kIOReturnSuccess) return "log metadata read failed";
@@ -375,7 +388,17 @@ static const char *saveNativeLog(void) {
   bzero(image,sizeof(image));
   unsigned used=gNativeTextBytes;
   memcpy(image+4096,gNativeText,used);
-  used+=houji_gpu_cached_timing(reinterpret_cast<char *>(image+4096+used),8192);
+  used+=houji_gpu_cached_timing(reinterpret_cast<char *>(image+4096+used),gpuCapacity);
+  used+=houji_framebuffer_snapshot(reinterpret_cast<char *>(image+4096+used),displayCapacity);
+  used+=houji_display_timing_snapshot(reinterpret_cast<char *>(image+4096+used),panelCapacity);
+  used+=houji_sample_snapshot(reinterpret_cast<char *>(image+4096+used),sampleCapacity);
+  used+=houji_network_stack_snapshot(reinterpret_cast<char *>(image+4096+used),networkCapacity);
+  used+=houji_cpu_dvfs_snapshot(reinterpret_cast<char *>(image+4096+used),cpuCapacity);
+  unsigned batteryUsed=houjiBatterySurveySnapshot(reinterpret_cast<char *>(image+4096+used),batteryCapacity);
+  used+=batteryUsed;
+  unsigned fwUsed=houjiFwProbeSnapshot(reinterpret_cast<char *>(image+4096+used),batteryCapacity-batteryUsed);
+  used+=fwUsed;batteryUsed+=fwUsed;
+  used+=houji_adsp_snapshot(reinterpret_cast<char *>(image+4096+used),batteryCapacity-batteryUsed);
   static const char marker[]="\n--- XNU kernel message buffer (tail; NULs removed) ---\n";
   memcpy(image+4096+used,marker,sizeof(marker)-1);used+=sizeof(marker)-1;
   used+=copyKernelMessages(reinterpret_cast<char *>(image+4096+used),sizeof(image)-4096-used);
@@ -596,6 +619,7 @@ extern "C" void houji_ufs_root_attach(void) {
   houji_ufs_checkpoint("before CPU factory EPSS governor initialization; SMP proof complete",0);
   houji_cpu_dvfs_start();
   houji_ufs_checkpoint("after CPU factory EPSS governor initialization",0);
+  houjiBatterySurvey();
   int frequencyProbe=0;
   PE_parse_boot_argn("houji_cpu_freq_probe",&frequencyProbe,sizeof(frequencyProbe));
   if (frequencyProbe==1) {
@@ -652,6 +676,7 @@ extern "C" void houji_ufs_root_attach(void) {
     // Touch startup can save its preflight log; wait for qualified GPU/UFS coexistence.
     if(!houjiNativeGpuFsAllowed())panic("HOUJI TOUCH: live GPU coexistence not ready");
     houjiTouchStart();
+    houjiFwProbeStart();
     return;
   }
   houjiGpuStockFirmwareProbeOnce(); // enabled attempt always terminates via retained no-FS PSCI

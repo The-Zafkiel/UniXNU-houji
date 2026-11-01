@@ -18,6 +18,12 @@ extern void (*native_bridge_metal_problem_hook)(const char *);
 // The pixel formats of the textures asked for (first eight distinct) and how many texture requests the runtime refused.
 size_t native_bridge_metal_formats(char *out, size_t size);
 size_t native_bridge_metal_telemetry(char *out, size_t size);
+// CPU bookkeeping only, for yielding background shader priming to rendering.
+unsigned native_bridge_metal_recent_commits(uint64_t window_us);
+unsigned native_bridge_metal_pending_commits(void);
+// Atomic scalar observations from the optional background primer.
+extern uint32_t native_prime_compiling, native_prime_libraries_done, native_prime_libraries_total, native_prime_made, native_prime_rate,
+                native_prime_functions_resumed;
 // Structured cumulative artifact/driver-cache counters for offline qualification.
 struct NmbShaderCacheStats;
 bool native_bridge_metal_shader_cache_stats(struct NmbShaderCacheStats *out);

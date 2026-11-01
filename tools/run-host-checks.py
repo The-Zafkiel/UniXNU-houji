@@ -76,6 +76,8 @@ def main():
         suite = 'all' if apple_host else 'portable'
     if suite in ('apple', 'all') and not apple_host:
         parser.error('Apple runtime checks require an Apple Silicon macOS host with Xcode')
+    if platform.machine() not in ('arm64', 'aarch64'):
+        parser.error('Host checks compile AArch64 SMMU bindings; use an arm64 host')
     print(f'Host check suite: {suite} ({platform.system()} {platform.machine()})', flush=True)
     if suite == 'portable':
         print('Apple runtime checks are not covered here; CI runs them separately on macOS.', flush=True)

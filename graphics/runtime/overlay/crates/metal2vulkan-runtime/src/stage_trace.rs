@@ -4,20 +4,18 @@
 //! batches, when each was submitted, and when the completion waiter armed, saw it and finished it.
 //! The scheduler's and the waiters' own sleeps and wakes are recorded under id 0 and the queue.
 //!
-//! - **Bounded.** A record tries one slot lock; a collision drops the record without waiting.
-//!   Readers use the same slot lock, so a lap cannot mix fields from different records. Nothing allocates. The ring
+//! - **Cheap.** A record is one atomic add and three stores; nothing allocates or locks. The ring
 //!   keeps the newest [`RING`] records; a reader that falls behind loses the oldest.
 //! - **One clock.** The host's uptime clock in nanoseconds (`CLOCK_UPTIME_RAW` on Apple
 //!   platforms), the one the frontend's trace and the driver's rings use.
 //! - **Off unless asked for.** Records are kept only where the host's environment has
-//!   `HOUJI_GPU_TRACE=1` ([`diagnostics`]), read once. The frontend enables it only in an explicit
-//!   diagnostic build, in backboardd, and stops it at the file/time budget. Default builds keep no trace.
+//!   `SHENG_DIAG` ([`diagnostics`]), read once; the same switch keeps the allocation sites
+//!   (`creation.rs`). Without it a record costs one relaxed load.
 //! - **Ids.** A command buffer's id is the address of its shared state, alive from its commit to
 //!   its completion: records of one id between a commit stage and its completion are one command
 //!   buffer's.
 
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 /// The records the ring keeps.
 const RING: usize = 1 << 16;
@@ -64,6 +62,43 @@ pub enum Stage {
     SubmitStep = 16,
     /// The scheduler's thread went to sleep (id 0, `arg`: slice in ms, | 0x8000 on the GPU).
     SchedulerSleep = 20,
+    /// A memory operation began (`arg`: 1 foreground placement, 2 room keeper, 3 release).
+    MemoryBegin = 40,
+    /// Its pool (`arg`: memory type * 2 + 1 for images, + 0 for buffers).
+    MemoryPool = 41,
+    /// Its requested backing bytes in KiB.
+    MemoryBytes = 42,
+    /// Its pool's available contiguous range in KiB at the decision.
+    MemoryAvailable = 43,
+    /// Its Vulkan allocation ended (`arg`: 1 success, 0 refused).
+    MemoryAllocated = 44,
+    /// Existing backing was reused (`arg`: 1 pooled placement, 2 spare block).
+    MemoryReused = 45,
+    /// Its memory handle's low 32 bits.
+    MemoryHandleLow = 46,
+    /// Its memory handle's high 32 bits.
+    MemoryHandleHigh = 47,
+    /// Its backing was retained for reuse (`arg`: total spare bytes in KiB).
+    MemoryCached = 48,
+    /// Its physical release was queued (`arg`: pending bytes in KiB).
+    MemoryDeferred = 49,
+    /// Its physical release began.
+    MemoryFreeBegin = 50,
+    /// Its physical release ended.
+    MemoryFreeEnd = 51,
+    /// A release ran inline because the bounded queue was full.
+    MemoryQueueFull = 52,
+    /// Completion processing began.
+    CompleteBegin = 53,
+    /// Completion state and resource ownership were collected.
+    CompleteState = 54,
+    /// User completion handlers returned.
+    CompleteHandlers = 55,
+    /// Retained objects and runtime resources were released.
+    CompleteRetained = 56,
+    /// Completion gate and command-pool preparation ended.
+    CompleteEnd = 57,
+
     /// Something woke the scheduler's thread (id 0, `arg`: 0 commit, 1 completion, 2 host).
     SchedulerWake = 21,
     /// The scheduler's thread resumed after its sleep (id 0, `arg`: 1 timed out).
@@ -72,35 +107,9 @@ pub enum Stage {
     PassBegin = 23,
     /// The scheduler's thread ended a pass (id 0, `arg`: batches submitted, capped).
     PassEnd = 24,
-    /// Frontend command buffer created.
-    FrontCreated = 30,
-    /// Frontend commit entered.
-    FrontCommit = 31,
-    /// Frontend scheduled callback entered.
-    FrontScheduled = 32,
-    /// Frontend completion callback entered.
-    FrontCompleted = 33,
-    /// Measured GPU duration in us, saturated at 65535; absent when unavailable.
-    GpuMicros = 34,
-    /// Driver submit duration in us, saturated at 65535; absent when unavailable.
-    SubmitMicros = 35,
-    /// Frontend draw API wall time in us, saturated at 65535.
-    DrawMicros = 36,
-    /// Frontend encoder end wall time in us, saturated at 65535.
-    EndMicros = 37,
-    /// Frontend render pass creation wall time in us, saturated at 65535.
-    PassMicros = 38,
-    /// Draw count, saturated at 65535.
-    DrawCount = 39,
-    /// A frontend wait began; arg 0 completed, 1 scheduled.
-    WaitBegin = 40,
-    /// That wait ended, same arg.
-    WaitEnd = 41,
 }
 
 struct Slot {
-    busy: AtomicBool,
-    sequence: AtomicU64,
     when: AtomicU64,
     id: AtomicU64,
     /// stage | arg << 16 | sequence << 32: a reader takes the slot only where the sequence is the
@@ -110,16 +119,12 @@ struct Slot {
 
 #[allow(clippy::declare_interior_mutable_const)]
 const EMPTY: Slot = Slot {
-    busy: AtomicBool::new(false),
-    sequence: AtomicU64::new(0),
     when: AtomicU64::new(0),
     id: AtomicU64::new(0),
     word: AtomicU64::new(0),
 };
 static SLOTS: [Slot; RING] = [EMPTY; RING];
 static NEXT: AtomicU64 = AtomicU64::new(1);
-static DROPPED: AtomicU64 = AtomicU64::new(0);
-static STOPPED: AtomicBool = AtomicBool::new(false);
 
 /// The host's uptime clock in nanoseconds.
 pub fn now_nanos() -> u64 {
@@ -141,45 +146,19 @@ pub fn now_nanos() -> u64 {
     }
 }
 
-/// Whether the host asked for the runtime's diagnostics: `HOUJI_GPU_TRACE=1`, read
+/// Whether the host asked for the runtime's diagnostics: `SHENG_DIAG` in the environment, read
 /// once.
 pub(crate) fn diagnostics() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    !STOPPED.load(Ordering::Relaxed)
-        && *ON.get_or_init(|| std::env::var("HOUJI_GPU_TRACE").is_ok_and(|v| v == "1"))
-}
-
-/// Stop further recording when the frontend reaches its budget or cannot write the trace.
-pub fn stop() {
-    STOPPED.store(true, Ordering::Relaxed);
-}
-
-/// Dropped producers and the next sequence. Reader gaps additionally include lapped slots.
-pub fn statistics() -> [u64; 2] {
-    [
-        DROPPED.load(Ordering::Relaxed),
-        NEXT.load(Ordering::Relaxed),
-    ]
-}
-
-/// Frontend stages only. Unknown values are ignored, never converted to an invalid enum.
-pub fn frontend(id: usize, kind: u16, arg: u64) {
-    let stage = match kind {
-        30 => Stage::FrontCreated,
-        31 => Stage::FrontCommit,
-        32 => Stage::FrontScheduled,
-        33 => Stage::FrontCompleted,
-        34 => Stage::GpuMicros,
-        35 => Stage::SubmitMicros,
-        36 => Stage::DrawMicros,
-        37 => Stage::EndMicros,
-        38 => Stage::PassMicros,
-        39 => Stage::DrawCount,
-        40 => Stage::WaitBegin,
-        41 => Stage::WaitEnd,
-        _ => return,
-    };
-    mark(id, stage, arg.min(u16::MAX as u64) as u32);
+    // 0 not read yet, 1 off, 2 on.
+    static ON: AtomicU8 = AtomicU8::new(0);
+    match ON.load(Ordering::Relaxed) {
+        0 => {
+            let on = std::env::var_os("SHENG_DIAG").is_some();
+            ON.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+            on
+        }
+        state => state == 2,
+    }
 }
 
 /// Record `stage` of `id` with `arg`, now, where the diagnostics are on ([`diagnostics`]).
@@ -187,28 +166,16 @@ pub(crate) fn mark(id: usize, stage: Stage, arg: u32) {
     if !diagnostics() {
         return;
     }
+    if let Some(hook) = DIAGNOSTIC_HOOK.get() {
+        hook(39, id as u64, stage as u64, arg as u64);
+    }
     let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
     let slot = &SLOTS[(sequence as usize) & (RING - 1)];
-    if slot
-        .busy
-        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
-        DROPPED.fetch_add(1, Ordering::Relaxed);
-        return;
-    }
-    // A preempted producer may resume after a newer producer has already lapped it.
-    if slot.sequence.load(Ordering::Relaxed) >= sequence {
-        slot.busy.store(false, Ordering::Release);
-        DROPPED.fetch_add(1, Ordering::Relaxed);
-        return;
-    }
+    slot.word.store(0, Ordering::Release);
     slot.when.store(now_nanos(), Ordering::Relaxed);
     slot.id.store(id as u64, Ordering::Relaxed);
     let word = stage as u64 | ((arg as u64 & 0xffff) << 16) | ((sequence & 0xffff_ffff) << 32);
-    slot.word.store(word, Ordering::Relaxed);
-    slot.sequence.store(sequence, Ordering::Relaxed);
-    slot.busy.store(false, Ordering::Release);
+    slot.word.store(word, Ordering::Release);
 }
 
 /// One record as [`read`] gives it.
@@ -228,37 +195,46 @@ pub struct StageRecord {
 }
 
 /// The records from sequence `from` on (the oldest kept where `from` fell out of the ring), at most
-/// `out.len()`, oldest first: how many, and the sequence to ask for next. Busy, missing and
-/// overwritten slots are skipped, never waited for; sequence gaps must be kept in analysis.
+/// `out.len()`, oldest first: how many, and the sequence to ask for next.
 pub fn read(from: u64, out: &mut [StageRecord]) -> (usize, u64) {
     let newest = NEXT.load(Ordering::Acquire);
     let mut sequence = from.max(1).max(newest.saturating_sub(RING as u64 - 1024));
     let mut written = 0;
     while sequence < newest && written < out.len() {
         let slot = &SLOTS[(sequence as usize) & (RING - 1)];
-        if slot
-            .busy
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            sequence += 1;
-            continue;
-        }
-        let word = slot.word.load(Ordering::Relaxed);
-        if slot.sequence.load(Ordering::Relaxed) == sequence && word & 0xffff != 0 {
+        let word = slot.word.load(Ordering::Acquire);
+        if word >> 32 == sequence & 0xffff_ffff && word & 0xffff != 0 {
             let when = slot.when.load(Ordering::Relaxed);
             let id = slot.id.load(Ordering::Relaxed);
-            out[written] = StageRecord {
-                when,
-                id,
-                sequence: sequence as u32,
-                stage: (word & 0xffff) as u16,
-                arg: ((word >> 16) & 0xffff) as u16,
-            };
-            written += 1;
+            if slot.word.load(Ordering::Acquire) == word {
+                out[written] = StageRecord {
+                    when,
+                    id,
+                    sequence: sequence as u32,
+                    stage: (word & 0xffff) as u16,
+                    arg: ((word >> 16) & 0xffff) as u16,
+                };
+                written += 1;
+            }
+        } else if word == 0 {
+            // Being written: read again at the next call.
+            break;
         }
-        slot.busy.store(false, Ordering::Release);
         sequence += 1;
     }
     (written, sequence)
+}
+
+/// Optional host hook. The installed function must remain loaded for the process lifetime.
+pub type DiagnosticHook = extern "C" fn(u32, u64, u64, u64);
+static DIAGNOSTIC_HOOK: std::sync::OnceLock<DiagnosticHook> = std::sync::OnceLock::new();
+/// Install once before creating command queues. It never changes rendering state.
+pub fn set_diagnostic_hook(hook: DiagnosticHook) {
+    let _ = DIAGNOSTIC_HOOK.set(hook);
+}
+/// Link a command buffer to its Vulkan work, including batches later grouped by the scheduler.
+pub(crate) fn diagnostic_link(id: u64, command: u64, batch: u64) {
+    if let Some(hook) = DIAGNOSTIC_HOOK.get() {
+        hook(45, id, command, batch);
+    }
 }

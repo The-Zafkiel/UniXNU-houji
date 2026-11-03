@@ -23,6 +23,7 @@ impl Gate {fn allow(&self,n:usize){*lock(&self.permits)+=n;self.wake.notify_all(
 mod memory {
     use super::*;
     pub struct Memory(pub Arc<Gate>);
+    pub fn reap_retired(_: &Mutex<Memory>,_: &()) {}
     pub fn keep_room(m:&Mutex<Memory>,_:&(),_:&()){
         let g=Arc::clone(&lock(m).0);g.entered.send(()).unwrap();
         let mut permit=lock(&g.permits);

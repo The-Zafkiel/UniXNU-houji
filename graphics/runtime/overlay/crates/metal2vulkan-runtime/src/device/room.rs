@@ -92,29 +92,41 @@ fn keep(device: &Device) {
         return;
     };
     let shared = device.shared();
+    crate::memory::reap_retired(&shared.memory, shared.vk());
     crate::memory::keep_room(&shared.memory, shared.vk(), &shared.counts);
 }
 
 /// The thread's loop: a pass for each time room was asked since the last, until stopped.
 fn run(shared: &Shared, weak: &WeakDevice) {
     loop {
-        {
+        let requested = {
             let mut state = lock(&shared.state);
             while !state.asked && !state.stopping {
-                state = shared
+                let (next, timeout) = shared
                     .work
-                    .wait(state)
+                    .wait_timeout(state, std::time::Duration::from_millis(250))
                     .unwrap_or_else(PoisonError::into_inner);
+                state = next;
+                if timeout.timed_out() {
+                    break;
+                }
             }
             if state.stopping {
                 return;
             }
+            let requested = state.asked;
             state.asked = false;
-        }
+            requested
+        };
         let Some(device) = weak.upgrade() else {
             return;
         };
-        keep(&device);
+        if requested {
+            keep(&device);
+        } else {
+            let parts = device.shared();
+            crate::memory::reap_retired(&parts.memory, parts.vk());
+        }
         // Outside the state's lock: it may be the device's last handle, whose teardown stops
         // this thread.
         drop(device);

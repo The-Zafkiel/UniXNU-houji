@@ -28,7 +28,7 @@ SMMU 检查会编译 AArch64 绑定，因此不能在 x86 主机直接运行完�
 CI 分别运行 Ubuntu 24.04 arm64 的可移植检查和 macOS 15 的完整检查；不会以 Linux 通过代替
 Apple 接口验证。这里的 macOS 检查仍不执行手机 GPU。
 
-检查覆盖 GPU 的 12 个频点、上限取整、突发负载与空闲降频、HFI 表一致性、CPU 交互升降频和 Turnip BO 复用回归；另外编译有效 Submit/VM/SMMU 源码，在 4 KiB/16 KiB CPU 页的主机替身上验证缓存维护、TLB 同步、地址复用及失败隔离。板级提交门、显示队列和 shader 预热检查也执行有效源码中的函数。另测 TSENS 有效位/有符号温度/滞后与丢失读数，以及亮度范围、渐变和 DSI FIFO 的忙碌/超时/恢复。BO 检查会在同一线程交错条件下验证旧函数失败、修复函数通过。ASAN/UBSAN 检查不仿真 GPU 命令执行或证明实际 FPS。
+检查覆盖 GPU 的 12 个频点、上限取整、突发负载与空闲降频、HFI 表一致性、CPU 交互升降频和 Turnip BO 复用回归；另外编译有效 Submit/VM/SMMU 源码，在 4 KiB/16 KiB CPU 页的主机替身上验证缓存维护、TLB 同步、地址复用及失败隔离。板级提交门、显示队列检查也执行有效源码中的函数；当前默认关闭 shader 预热。另测 TSENS 有效位/有符号温度/滞后与丢失读数，以及亮度范围、渐变和 DSI FIFO 的忙碌/超时/恢复。BO 检查会在同一线程交错条件下验证旧函数失败、修复函数通过。ASAN/UBSAN 检查不仿真 GPU 命令执行或证明实际 FPS。
 
 GPU 参数、显示/预热行为和实机对照流程见 [性能修复](performance.md)。
 
@@ -92,6 +92,7 @@ python3 tools/build-metal.py \
   --mesa-include /path/to/mesa/include \
   --fixture-air /path/to/runtime_examples.air \
   --function-constant-air /path/to/function_constant.air \
+  --scanout-air /path/to/scanout_convert.air \
   --turnip /path/to/libvulkan_freedreno.dylib \
   --output out/metal
 ```
@@ -107,6 +108,23 @@ python3 tools/build-metal.py \
 `sysmem`。两者的默认环境均关闭并发分箱；已有进程环境不会被覆盖，日志 `TU mode/flags`
 记录编译选择与实际环境。构建报告记录选择，主机检查只验证配置与环境处理，不证明 GPU 稳定性。
 只生成本地组件，不挂载系统卷或写设备；仍需检查目标 iOS 用户空间导入符号和实际运行。
+
+`--sample-policy single` 是当前前端的默认测试策略，降低纹理、管线和 render pass 的多重采样数量，
+代价是减少 MSAA 抗锯齿。`--sample-policy requested` 保留应用请求，进程也可用
+`NATIVE_METAL_SINGLE_SAMPLE=0` 对照。只 resolve 且不 Load 的 pass 可直接画到目标；
+Load 或 StoreAndResolve 则保留源附件，在结束编码后复制到 resolve 目标。不能只改 sampleCount。
+该策略参考 dada 和 AdrenoMetal，不代表已找到所有渲染异常的原因。
+
+主机上的真实像素检查需用相同固定运行时编译 macOS bridge，并提供本机 Vulkan loader：
+
+```bash
+python3 tools/check-metal-pixels.py \
+  --archive /path/to/macos/libnative_metal_bridge.a \
+  --loader /path/to/libMoltenVK.dylib --output out/metal-pixels
+```
+
+检查分别运行原生 Metal、保留采样和单采样路径，验证清屏、Load、源附件保留、半浮点、
+透明混合、memoryless resolve 和多 slice/mip 复制的已定义像素。不模拟 Adreno 或证明面板帧率。
 
 Turnip 的 Darwin 后端与内核 `NativeAdrenoABI.h` 必须匹配。128-IB 扩展通过 Query 的 `NativeAdrenoParamsSubmitBatch` 协商，method 17 接收 3104 字节；旧 method 5 保持 416 字节/16-IB。新运行时在旧内核使用旧接口，不在提交失败后重新发送。检查同时执行实际直接/隧道传输、分批顺序、128 个引用的 fence 生命周期、完整 ring 包捕获及板级校验；这些主机检查不证明 GPU 执行和性能。
 
@@ -136,3 +154,15 @@ Metal 的七个异步函数/管线创建入口使用串行后台编译队列，�
 `tools/build-metal.py` 同时输出 `NativeAdrenoMetal.clients`，由 `graphics/metal/NativeAdrenoMetal.clients` 固定输入。将它作为 `/System/Library/Extensions/NativeAdrenoMetal.clients` 安装，不能只替换 bundle。新增的 Preferences 名单必须配套 `HoujiGpuClientLayout.h` 的第五个受限窗口；进程名不构成 SMMU 隔离，既有沙箱、窗口边界及失败隔离继续生效。
 
 r238 的桌面进程 ASYNC 计数全部为 0；同步编译和其他进程仍需分别分析。驱动接入与验证顺序见[待完成项](roadmap.md#按依赖推进)。
+
+## 完整图形栈候选
+
+当前 Metal 构建需要从 `graphics/metal/AdrenoMetal/shaders/scanout_convert.ll` 生成的 AIR，
+通过 `--scanout-air` 传入。它随配套 bridge 构建，但 houji 的 GPU scanout handoff 默认关闭。
+`--turnip-render-mode` 默认 `autotune`，即 `TU_DEBUG=nocb`；显式 `sysmem` 可用于对照。
+Rust release 使用 fat LTO 和一个 codegen unit。CPU 采样器、旧绿色初始化 probe 和启动像素
+probe 选项会明确拒绝；真实像素检查独立运行，不把旧钩子当成新实现的测试。
+
+匹配来源、iOS16 适配和验证边界见 [图形栈替换](gpu-replacement.md)。旧实现专用测试保留在
+`archive/gpu-r300-checks/`；当前 BO 缓存、备用内存、room worker、wire ABI、Metal 对象
+和异步 API 检查执行当前源码。主机像素通过不代表 A750、桌面动画或 120 FPS。

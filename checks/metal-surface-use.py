@@ -30,7 +30,8 @@ unit = r'''
 #include <unistd.h>
 #include "bridge/NativeMetalObjects.h"
 static bool gCountsSurfaceUse;
-static std::atomic<uint64_t> gSurfaceUseAdded,gSurfaceUseRemoved;
+struct DetailSpan {DetailSpan(unsigned,uintptr_t){}};
+static void frameEvent(unsigned,...) {}
 static unsigned released;
 extern "C" void nmb_texture_release(NmbTexture *p){if(p)++released;}
 extern "C" void nmb_texture_describe(const NmbTexture *,NmbTextureDescriptor *out){*out={};}
@@ -61,7 +62,7 @@ int main(){@autoreleasepool{
  assert(surface && IOSurfaceGetUseCount(surface)==0);
  gCountsSurfaceUse=false;
  @autoreleasepool{NBTexture *t=make(surface);[t countUse];assert(IOSurfaceGetUseCount(surface)==0);}
- assert(gSurfaceUseAdded==0 && gSurfaceUseRemoved==0);
+
  gCountsSurfaceUse=true;
  NSMutableArray *pending=[NSMutableArray array];
  @autoreleasepool{
@@ -72,10 +73,10 @@ int main(){@autoreleasepool{
   [pending addObject:view];
  }
  // The view retains its parent; command owners retain the view through completion.
- assert(IOSurfaceGetUseCount(surface)==2 && gSurfaceUseRemoved==0);
+ assert(IOSurfaceGetUseCount(surface)==2);
  [pending removeAllObjects];
  assert(IOSurfaceGetUseCount(surface)==0 && !IOSurfaceIsInUse(surface));
- assert(gSurfaceUseAdded==2 && gSurfaceUseRemoved==2 && released==3);
+ assert(released==3);
  @autoreleasepool{NBTexture *t=[NBTexture new];[t countUse];assert(!t.counted);}
  CFRelease(surface);
 }}

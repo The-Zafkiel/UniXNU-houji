@@ -30,6 +30,8 @@ typedef struct NmbFence NmbFence;
 const char *nmb_last_error(void);
 /* The bridge's embedded AIR fixtures: the runtime's own runtime_examples and kernel_function_constant_gate_fold. */
 const void *nmb_fixture_air(size_t *length);
+// The GPU scanout's half-float conversion kernel as AIR bitcode (GpuScanoutPresenter.h).
+const void *nmb_scanout_convert_air(size_t *length);
 const void *nmb_function_constant_air(size_t *length);
 
 /* loader: a library exporting vkGetInstanceProcAddr (Turnip on the tablet). cache: a writable directory for translated shaders. */
@@ -39,12 +41,30 @@ size_t nmb_device_name(const NmbDevice *, char *out, size_t size);
 uint64_t nmb_device_max_buffer_length(const NmbDevice *);
 // Pipeline makings (count, total us, longest us, waited us, failed), sink messages (info, warning+), shader cache hits/misses/writes.
 bool nmb_device_work_stats(const NmbDevice *, uint64_t out[10]);
-/* QoS initiated/interactive requests, set/read errors, observed initiated/interactive. */
-void nmb_thread_qos_stats(uint64_t out[6]);
-/* Diagnostic fresh-pattern marker: enabled flag, planned texture count. No GPU work. */
-void nmb_pattern_probe_stats(uint64_t out[2]);
-/* Checked/remapped ranges, identity queries/unknowns, total/max query us. */
-bool nmb_no_copy_remaps(uint64_t out[6]);
+/* The shader cache's full counts in 24 words: hits, misses, function hits and misses, compute pipeline hits and misses, render pipeline hits and misses,
+ * rejected, read failures, writes, writes queued, writes on a calling thread, bytes written, queued hits, write failures, evictions, driver cache loads,
+ * driver pipeline hits, driver pipeline misses, driver saves, then three spare zeros. */
+bool nmb_device_shader_cache_detail(const NmbDevice *, uint64_t out[24]);
+/* The translator source the runtime was built from, which keys the shader cache (build-native-metal-bridge.py). */
+const char *nmb_runtime_build(void);
+// Linear images made/refused/refused again, shadowed textures, shadow copies, texels copied back, linear passes in place/through copies.
+bool nmb_device_texture_counts(const NmbDevice *, uint64_t out[8]);
+// Passes begun as instances, split inline; instance splits for a barrier, tile memory, a memoryless write, a pending pipeline; stand-ins
+// made and their bytes; stand-in copies made and those made at draws.
+bool nmb_device_pass_counts(const NmbDevice *, uint64_t out[10]);
+// Bytes of pooled blocks live and placed in them, empty kept, dedicated, host imports; bytes allocated so far; pooled and dedicated
+// blocks live; GPU pool blocks made and released.
+bool nmb_device_memory_counts(const NmbDevice *, uint64_t out[10]);
+/* The runtime's command buffer stages from sequence from on (bridge patch 0022): 24-byte records {u64 uptime ns, u64 id, u32 sequence,
+ * u16 stage, u16 arg}; returns how many, *next the sequence to ask for next. */
+size_t nmb_stage_ring_read(uint64_t from, void *out, size_t max, uint64_t *next);
+/* Frees the runtime's spare dedicated blocks and kept empty pooled blocks (memory pressure); returns how many went. */
+size_t nmb_device_release_kept_memory(const NmbDevice *);
+// Call stacks that allocated device memory of 4 MiB or more, most bytes first: records of twelve words (bytes, allocations, ten return
+// addresses); returns how many were written, at most max.
+size_t nmb_allocation_sites(uint64_t *out, size_t max);
+// No-copy ranges checked, and those whose pages had changed since a buffer was last made over them (reported to the runtime as remapped).
+bool nmb_no_copy_remaps(uint64_t out[2]);
 /* Artifact lookups and driver pipeline records are separate cache layers. */
 struct NmbShaderCacheStats {
     uint64_t hits, misses, rejected, read_failures, writes, write_failures, evictions;
@@ -53,14 +73,6 @@ struct NmbShaderCacheStats {
 bool nmb_device_shader_cache_stats(const NmbDevice *, struct NmbShaderCacheStats *);
 size_t nmb_last_warning(char *out, size_t size);
 bool nmb_device_max_threads_per_threadgroup(const NmbDevice *, uint64_t out[3]);
-/* Free only retired image spares and empty pool blocks on memory pressure. */
-size_t nmb_device_release_kept_memory(const NmbDevice *);
-/* Opt-in bounded command-stage diagnostics; timestamps are CLOCK_UPTIME_RAW ns. */
-struct NmbStageRecord { uint64_t when, id; uint32_t sequence; uint16_t stage, arg; };
-size_t nmb_stage_ring_read(uint64_t from, struct NmbStageRecord *, size_t count, uint64_t *next);
-void nmb_stage_ring_stop(void);
-void nmb_stage_ring_stats(uint64_t out[2]);
-void nmb_command_buffer_trace(const NmbCommandBuffer *, uint16_t kind, uint64_t arg);
 /* Device queries the runtime answers by Metal selector: Apple's private counts and flags where the device has an answer of its own,
  * and the public queries. A selector's kind says its result and argument. */
 enum {NMB_ANSWER_COUNT = 0, NMB_ANSWER_FLAG = 1, NMB_ANSWER_COUNT_ARG = 2, NMB_ANSWER_FLAG_ARG = 3};
@@ -89,13 +101,9 @@ uint64_t nmb_buffer_gpu_address(const NmbBuffer *);
 
 struct NmbTextureDescriptor {
     uint64_t type, format, width, height, depth, levels, samples, array_length, usage, options;
-    uint64_t allow_gpu_optimized_contents; /* exactly 0 or 1 */
-    uint64_t swizzle[4]; /* Metal channel sources: red, green, blue, alpha */
     uint64_t rotation, framebuffer_only, is_drawable;
+    uint64_t swizzle; /* RGBA bytes, bit 32 marks an explicit value; zero means identity */
 };
-#if defined(__cplusplus)
-static_assert(sizeof(NmbTextureDescriptor)==144, "matched Rust/C texture descriptor");
-#endif
 /* Heaps: type 0 automatic / 1 placement; offset UINT64_MAX asks an automatic heap to place the resource. */
 NmbHeap *nmb_heap_new(NmbDevice *, uint64_t type, uint64_t size, uint64_t options);
 void nmb_heap_release(NmbHeap *);
@@ -106,6 +114,8 @@ uint64_t nmb_heap_max_available_size(const NmbHeap *, uint64_t alignment);
 uint64_t nmb_heap_set_purgeable_state(const NmbHeap *, uint64_t state);
 NmbBuffer *nmb_heap_new_buffer(const NmbHeap *, uint64_t length, uint64_t options, uint64_t offset);
 NmbTexture *nmb_heap_new_texture(const NmbHeap *, const struct NmbTextureDescriptor *, uint64_t offset);
+bool nmb_device_heap_texture_size_and_align(const NmbDevice *, const struct NmbTextureDescriptor *, uint64_t out[2]); /* size, align */
+bool nmb_device_heap_buffer_size_and_align(const NmbDevice *, uint64_t length, uint64_t options, uint64_t out[2]);
 NmbTexture *nmb_texture_new(NmbDevice *, const struct NmbTextureDescriptor *);
 /* A linear texture over a buffer's bytes; iosurface marks the buffer as standing for a surface without planes (Metal's IOSurface rules). */
 NmbTexture *nmb_texture_new_on_buffer(NmbBuffer *, const struct NmbTextureDescriptor *, uint64_t offset, uint64_t bytes_per_row, bool iosurface);
@@ -113,15 +123,24 @@ NmbTexture *nmb_texture_new_on_buffer(NmbBuffer *, const struct NmbTextureDescri
 NmbTexture *nmb_texture_new_on_surface(NmbBuffer *, const struct NmbTextureDescriptor *, uint64_t offset, uint64_t bytes_per_row,
                                        uint32_t pixel_format, uint64_t plane, uint64_t width, uint64_t height, uint64_t chroma_offset,
                                        uint64_t chroma_bytes_per_row);
-bool nmb_device_native_astc_copy_check(NmbDevice *);
-NmbTexture *nmb_texture_new_native_astc4x4(NmbBuffer *, const NmbTextureDescriptor *, uint64_t bytes_per_row);
 NmbTexture *nmb_texture_new_linear(NmbBuffer *, const struct NmbTextureDescriptor *, uint64_t offset, uint64_t bytes_per_row, uint64_t bytes_per_image);
 /* whole: a view of every level and slice as format; else levels and slices are {start, count} and kind the view's texture type. */
 NmbTexture *nmb_texture_new_view(NmbTexture *, uint64_t format, uint64_t kind, const uint64_t levels[2], const uint64_t slices[2], bool whole);
-NmbTexture *nmb_texture_new_view_swizzle(NmbTexture *, uint64_t format, uint64_t kind, const uint64_t levels[2], const uint64_t slices[2], const uint64_t swizzle[4]);
 /* setPurgeableState: with Metal's raw state; the answer's raw state, 0 where it fails. */
 uint64_t nmb_texture_set_purgeable_state(const NmbTexture *, uint64_t state);
 uint64_t nmb_buffer_set_purgeable_state(const NmbBuffer *, uint64_t state);
+uint64_t nmb_texture_allocated_size(const NmbTexture *);
+uint64_t nmb_device_current_allocated_size(const NmbDevice *);
+bool nmb_texture_make_aliasable(const NmbTexture *);
+bool nmb_texture_is_aliasable(const NmbTexture *);
+bool nmb_buffer_make_aliasable(const NmbBuffer *);
+bool nmb_buffer_is_aliasable(const NmbBuffer *);
+NmbTexture *nmb_texture_new_view_swizzle(NmbTexture *, uint64_t format, uint64_t kind, const uint64_t levels[2], const uint64_t slices[2], uint64_t swizzle);
+uint32_t nmb_function_constant_count(const NmbFunction *);
+size_t nmb_function_constant_name_size(const NmbFunction *, uint32_t at);
+bool nmb_function_constant_at(const NmbFunction *, uint32_t at, char *name, size_t capacity, uint64_t *index, uint64_t *data_type, bool *required);
+bool nmb_render_set_viewports(NmbEncoder *, const double *values, size_t count);
+bool nmb_render_set_scissors(NmbEncoder *, const uint64_t *values, size_t count);
 void nmb_texture_release(NmbTexture *);
 void nmb_texture_describe(const NmbTexture *, struct NmbTextureDescriptor *out);
 bool nmb_texture_replace(NmbTexture *, const uint64_t region[6], uint64_t level, uint64_t slice, const void *bytes, uint64_t bytes_per_row,
@@ -139,10 +158,16 @@ NmbFunction *nmb_function_new(NmbLibrary *, const char *name);
  * indexed value; bytes holds the value's bytes. */
 struct NmbConstant {uint64_t type, index; const char *name; const void *bytes; uint64_t length;};
 NmbFunction *nmb_function_new_specialized(NmbLibrary *, const char *name, const struct NmbConstant *constants, uint32_t count);
+// The library's function with every function constant it declares set to zero (shader priming), or null.
 NmbFunction *nmb_function_new_zero_constants(NmbLibrary *, const char *name);
+/* nmb_function_new_specialized, with every declared constant the caller left out set to zero (false for a bool). */
+NmbFunction *nmb_function_new_specialized_zero_rest(NmbLibrary *, const char *name, const struct NmbConstant *constants, uint32_t count);
 void nmb_function_release(NmbFunction *);
+bool nmb_function_set_specialized_name(NmbFunction *, const char *);
 /* Metal's MTLFunctionType (1 vertex, 2 fragment, 3 kernel, ...). */
 uint64_t nmb_function_type(const NmbFunction *);
+uint64_t nmb_function_patch_type(const NmbFunction *);              /* MTLPatchType */
+int64_t nmb_function_patch_control_point_count(const NmbFunction *); /* -1: no patch, or no count stated */
 
 NmbComputePipeline *nmb_compute_pipeline_new(NmbDevice *, NmbFunction *);
 void nmb_compute_pipeline_release(NmbComputePipeline *);
@@ -161,6 +186,17 @@ struct NmbRenderPipelineDescriptor {
     uint64_t vertex_inputs; /* 0: no vertex descriptor */
     struct NmbVertexAttribute attributes[31];
     struct NmbVertexLayout layouts[31];
+    /* A post-tessellation vertex function's state; tessellates 0 leaves it unset (zeroed descriptors stay untessellated). */
+    struct NmbTessellation {
+        uint64_t tessellates, max_factor, partition_mode, factor_format, factor_step_function, output_winding, control_point_index_type,
+            factor_scale_enabled;
+    } tessellation;
+    /* vertexLinkedFunctions / fragmentLinkedFunctions .functions and .privateFunctions: visible functions each stage calls (RenderBox's
+     * custom_blend fragment functions call theirs this way). Zero counts: none. */
+    NmbFunction *const *vertex_linked; uint64_t vertex_linked_count;
+    NmbFunction *const *vertex_private_linked; uint64_t vertex_private_linked_count;
+    NmbFunction *const *fragment_linked; uint64_t fragment_linked_count;
+    NmbFunction *const *fragment_private_linked; uint64_t fragment_private_linked_count;
 };
 NmbRenderPipeline *nmb_render_pipeline_new(NmbDevice *, const struct NmbRenderPipelineDescriptor *);
 /* Descriptor binaryArchives and MTLPipelineOption bits. NULL options means defaults.
@@ -182,6 +218,13 @@ bool nmb_binary_archive_add_render(NmbBinaryArchive *, const struct NmbRenderPip
 bool nmb_binary_archive_add_compute(NmbBinaryArchive *, NmbFunction *);
 bool nmb_binary_archive_add_compute_descriptor(NmbBinaryArchive *, const struct NmbComputePipelineDescriptor *);
 void nmb_render_pipeline_release(NmbRenderPipeline *);
+// A pipeline's reflection, as its creation's `reflection:` answers it, in JSON: {"vertex":[...],"fragment":[...]} for a render pipeline,
+// {"bindings":[...]} for a compute pipeline; each binding has Metal's raw values and a buffer's nested struct/array/pointer types. Null: refused.
+typedef struct NmbReflection NmbReflection;
+NmbReflection *nmb_render_pipeline_reflection(const struct NmbRenderPipelineDescriptor *);
+NmbReflection *nmb_compute_pipeline_reflection(const struct NmbComputePipelineDescriptor *);
+const char *nmb_reflection_json(const NmbReflection *);
+void nmb_reflection_release(NmbReflection *);
 
 struct NmbSamplerDescriptor {
     uint64_t min_filter, mag_filter, mip_filter, s_address, t_address, r_address, border_color, normalized, max_anisotropy, compare, lod_average;
@@ -196,6 +239,7 @@ NmbDepthStencil *nmb_depth_stencil_new(NmbDevice *, const struct NmbDepthStencil
 void nmb_depth_stencil_release(NmbDepthStencil *);
 
 NmbQueue *nmb_queue_new(NmbDevice *);
+NmbQueue *nmb_queue_new_with_max_command_buffer_count(NmbDevice *, size_t);
 void nmb_queue_release(NmbQueue *);
 NmbCommandBuffer *nmb_command_buffer_new(NmbQueue *);
 void nmb_command_buffer_release(NmbCommandBuffer *);
@@ -217,8 +261,9 @@ int nmb_command_buffer_wait(NmbCommandBuffer *, uint64_t timeout_ms);
 /* Metal's MTLCommandBufferStatus (0 not enqueued .. 4 completed, 5 error). */
 uint64_t nmb_command_buffer_status(const NmbCommandBuffer *);
 size_t nmb_command_buffer_error(const NmbCommandBuffer *, char *out, size_t size);
+// Metal's MTLCommandBufferError code, or 0 for no error / a translation-runtime refusal.
+uint64_t nmb_command_buffer_metal_error_code(const NmbCommandBuffer *);
 double nmb_command_buffer_gpu_time(const NmbCommandBuffer *, bool end);
-double nmb_command_buffer_kernel_time(const NmbCommandBuffer *, bool end);
 
 /* Events: an MTLEvent (shared false) or an MTLSharedEvent within this process. */
 NmbEvent *nmb_event_new(NmbDevice *, bool shared);
@@ -269,9 +314,6 @@ bool nmb_compute_dispatch_indirect(NmbEncoder *, NmbBuffer *, uint64_t offset, c
 
 bool nmb_render_set_pipeline(NmbEncoder *, NmbRenderPipeline *);
 bool nmb_render_set_depth_stencil(NmbEncoder *, NmbDepthStencil *);
-/* Exactly one buffer/texture handle; unknown resources and enums are refused. */
-bool nmb_encoder_use_resource(NmbEncoder *, NmbBuffer *, NmbTexture *, uint64_t usage, uint64_t stages);
-bool nmb_encoder_memory_barrier_scope(NmbEncoder *, uint64_t scope, uint64_t after_stages, uint64_t before_stages);
 bool nmb_render_set_viewport(NmbEncoder *, const double viewport[6]);
 bool nmb_render_set_scissor(NmbEncoder *, const uint64_t rect[4]);
 bool nmb_render_set_raster(NmbEncoder *, uint64_t cull_mode, uint64_t winding, uint64_t fill_mode);
@@ -283,6 +325,14 @@ bool nmb_render_set_visibility_mode(NmbEncoder *, uint64_t mode, uint64_t offset
 bool nmb_render_draw(NmbEncoder *, uint64_t primitive, uint32_t start, uint32_t count, uint32_t instances, uint32_t base_instance);
 bool nmb_render_draw_indexed(NmbEncoder *, uint64_t primitive, uint32_t count, uint64_t index_type, NmbBuffer *indices, uint64_t offset,
                              uint32_t instances, int32_t base_vertex, uint32_t base_instance);
+/* NULL buffer unsets it. */
+bool nmb_render_set_tessellation_factor_buffer(NmbEncoder *, NmbBuffer *, uint64_t offset, uint64_t instance_stride);
+bool nmb_render_set_tessellation_factor_scale(NmbEncoder *, float scale);
+/* NULL indirect: patch_start, patch_count, instances and base_instance; otherwise read from it. NULL control_point_index: the patches'
+ * own control points. NULL patch_index: patches patch_start + i. */
+bool nmb_render_draw_patches(NmbEncoder *, uint32_t control_points, uint32_t patch_start, uint32_t patch_count, NmbBuffer *patch_index,
+                             uint64_t patch_index_offset, NmbBuffer *control_point_index, uint64_t control_point_index_offset,
+                             uint32_t instances, uint32_t base_instance, NmbBuffer *indirect, uint64_t indirect_offset);
 
 bool nmb_blit_copy_buffer(NmbEncoder *, NmbBuffer *source, uint64_t source_offset, NmbBuffer *destination, uint64_t destination_offset,
                           uint64_t size);
@@ -297,6 +347,8 @@ bool nmb_blit_texture_to_buffer(NmbEncoder *, NmbTexture *source, uint64_t slice
                                 const uint64_t size[3], NmbBuffer *destination, uint64_t offset, uint64_t bytes_per_row,
                                 uint64_t bytes_per_image);
 bool nmb_blit_generate_mipmaps(NmbEncoder *, NmbTexture *);
+uint64_t nmb_command_buffer_diagnostic_id(const NmbCommandBuffer *buffer);
+void nmb_gpu_diagnostic_hook(void (*hook)(uint32_t,uint64_t,uint64_t,uint64_t));
 #ifdef __cplusplus
 }
 #endif

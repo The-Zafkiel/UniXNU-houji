@@ -102,21 +102,21 @@ fn find(
                     continue;
                 };
                 match body.insts.get(l).map(|l| (&l.kind, l.ty)) {
-                    Some((
-                        &InstKind::Load {
-                            ptr,
-                            volatile: false,
-                            atomic: None,
-                            ..
-                        },
-                        ty,
-                    )) if parts.types.int_bits(ty).map(u32::from)
-                        == Some(parts.data_layout.pointer(space.raw()).size_bits)
-                        && !matches!(parts.types.get(ty), Some(Type::Vector { .. })) =>
-                    {
-                        ptr
-                    }
-                    _ => continue,
+                Some((
+                    &InstKind::Load {
+                        ptr,
+                        volatile: false,
+                        atomic: None,
+                        ..
+                    },
+                    ty,
+                )) if parts.types.int_bits(ty).map(u32::from)
+                    == Some(parts.data_layout.pointer(space.raw()).size_bits)
+                    && !matches!(parts.types.get(ty), Some(Type::Vector { .. })) =>
+                {
+                    ptr
+                }
+                _ => continue,
                 }
             }
             _ => continue,

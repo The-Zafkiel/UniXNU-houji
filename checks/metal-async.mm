@@ -66,8 +66,8 @@ static void beginCompile() {
 }
 - (id<MTLComputePipelineState>)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d options:(MTLPipelineOption)options reflection:(MTLComputePipelineReflection **)reflection error:(NSError **)error {
     beginCompile(); assert([d.label isEqual:@"before"] && d.maxTotalThreadsPerThreadgroup == 64);
-    assert(options == MTLPipelineOptionArgumentInfo && reflection);
-    *reflection = (MTLComputePipelineReflection *)@"reflection";
+    assert((options == MTLPipelineOptionArgumentInfo && reflection) || (options == MTLPipelineOptionNone && !reflection));
+    if(reflection)*reflection = (MTLComputePipelineReflection *)@"reflection";
     *error = nil; return (id<MTLComputePipelineState>)[NSObject new];
 }
 /* ACTUAL_METHODS */
@@ -83,7 +83,7 @@ int main() {
     @autoreleasepool {
         Fixture *fixture = [Fixture new];
         gate = dispatch_semaphore_create(0); done = dispatch_semaphore_create(0);
-        for (testCase = 0; testCase < 7; ++testCase) {
+        for (testCase = 0; testCase < 8; ++testCase) {
             returned = false;
             FixtureConstants *constants = [FixtureConstants new]; constants.value = 7;
             NSMutableString *name = [@"before" mutableCopy];
@@ -112,6 +112,7 @@ int main() {
                 case 4: [fixture newComputePipelineStateWithFunction:(id)function completionHandler:^(id s,NSError *e){check(s,nil,e);}]; break;
                 case 5: [fixture newComputePipelineStateWithFunction:(id)function options:MTLPipelineOptionArgumentInfo completionHandler:check]; break;
                 case 6: [fixture newComputePipelineStateWithDescriptor:compute options:MTLPipelineOptionArgumentInfo completionHandler:check]; break;
+                case 7: [fixture newComputePipelineStateWithDescriptor:compute completionHandler:^(id s,NSError *e){check(s,nil,e);}]; break;
                 }
             }
             assert(compileCalls <= testCase + 1 && callbacks == testCase);
@@ -135,7 +136,7 @@ int main() {
             });
         });
         waitFor(done);
-        assert(gAsyncRequested[0] == 4 && gAsyncRequested[1] == 2 && gAsyncRequested[2] == 3);
+        assert(gAsyncRequested[0] == 4 && gAsyncRequested[1] == 2 && gAsyncRequested[2] == 4);
     }
-    puts("PASS: seven actual async APIs return before gated compilation, snapshot inputs, retain functions, forward errors/reflection and permit callback reentry; no GPU");
+    puts("PASS: eight actual async APIs return before gated compilation, snapshot inputs, retain functions, forward errors/reflection and permit callback reentry; no GPU");
 }

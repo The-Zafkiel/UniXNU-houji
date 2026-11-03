@@ -338,7 +338,7 @@ pub(super) struct DeviceShared {
     pub(super) color_write_masks: Option<ColorWriteMasks>,
     /// The device's slot among those its commands go through (`recorder`), where it took one:
     /// let go of after `vkDestroyDevice` (it drops after the teardown, `Drop`). Its counts are
-    /// `WorkCounts::commands_recorded`.
+    /// `WorkCounts::commands_replayed`.
     recording: Option<Slot>,
     /// The reasons a draw that reads its pass's texture took the split that the device said
     /// already, where `METAL2VULKAN_LOG_PIPELINES` is set (`render/snapshot.rs`).
@@ -433,8 +433,6 @@ pub(super) struct DeviceShared {
     pub(super) rebinds: super::rebind::Rebinds,
     /// The no-copy buffers by the host memory they were made over (`host_aliases.rs`).
     pub(super) aliases: super::host_aliases::HostAliases,
-    /// The guest RAMs it uses, and their chunks it imported (`host_ram.rs`).
-    pub(crate) host_ram: super::host_ram::RamSource,
     /// Its copied host buffers, compared at each commit and each batch's completion
     /// (`copied.rs`).
     pub(crate) copied: Arc<super::copied::CopiedBuffers>,
@@ -524,10 +522,6 @@ pub(super) struct DeviceShared {
     /// rebind's or a storage form's new `VkImage`, a detach's stand-in, a reattach): a view kept
     /// by what it was made of (`binding::BindMemo`) is current while this holds.
     pub(crate) views_epoch: AtomicU64,
-    /// Its pipeline records: the hook they go to, and the counts (`warm/record.rs`).
-    pub(crate) pipeline_recording: crate::warm::Recording,
-    /// Its warm calls: the records queued, its warm thread, and the counts (`warm/pass.rs`).
-    pub(crate) warmer: crate::warm::Warmer,
 }
 
 impl DeviceShared {
@@ -607,7 +601,7 @@ impl DeviceShared {
 
     /// The commands recorded through its slot so far, by kind (`recorder`); none where it took
     /// no slot.
-    pub(crate) fn commands_recorded(&self) -> crate::CommandsRecorded {
+    pub(crate) fn commands_recorded(&self) -> crate::CommandsReplayed {
         self.recording
             .as_ref()
             .map_or_else(Default::default, Slot::counts)
@@ -1181,8 +1175,6 @@ pub(super) struct Parts {
     pub(super) lowering_refuses: BTreeSet<Degradation>,
     /// Its command buffers keep execution records (`DeviceOptions::record_executions`).
     pub(super) record_executions: bool,
-    /// Where its pipeline records go (`DeviceOptions::pipeline_records`, `warm/record.rs`).
-    pub(super) pipeline_records: Option<crate::warm::RecordHook>,
     /// Its check of the first move over host pages fails whatever the moves did
     /// (`DeviceOptions::fail_in_place_check`).
     pub(super) fail_in_place_check: bool,
@@ -1260,7 +1252,6 @@ impl Device {
             announce_each,
             lowering_refuses,
             record_executions,
-            pipeline_records,
             fail_in_place_check,
             view_reinterpretation,
             generated_commands,
@@ -1530,6 +1521,31 @@ impl Device {
         // SAFETY: the device is live, of `physical`, and enables timeline semaphores, and
         // `bufferDeviceAddress` where `device_address` says so; `queues` holds at least one of
         // its queues, which nothing uses yet.
+        let priming_has = drawn.has(prime::Has {
+            timestamps: timestamp_bits > 0,
+            // A device the runtime created enables it (`enables.rs`).
+            host_query_reset: owned,
+            device_addresses: device_address,
+            generated_commands: generated_commands.is_some(),
+            sparse_binding: sparse.binds(),
+            push_descriptor: push_descriptor.is_some(),
+            calibration: calibrated.is_some(),
+            object_names: object_name.is_some(),
+            extended_dynamic_state: false,
+            primitive_restart: false,
+            color_write_masks: false,
+            sized_index_bind: false,
+            ycbcr_conversion: ycbcr_formats.primer().is_some(),
+        });
+        // Raw disk/cache I/O only: starting the ordinary guarded cache or its
+        // worker before priming would change the destructor ordering it protects.
+        let priming_cache = cache.priming(
+            &unsafe { instance.raw.get_physical_device_properties(physical) },
+            compile.profile_fingerprint(),
+            instance.settings,
+            prime::cache_key(priming_has, queue_family),
+            instance.sink().cloned(),
+        );
         if let Err(error) = unsafe {
             prime::prime(
                 &instance.raw,
@@ -1545,27 +1561,13 @@ impl Device {
                 queue_family,
                 &queues,
                 Sharing::new(&queue_families),
-                drawn.has(prime::Has {
-                    timestamps: timestamp_bits > 0,
-                    // A device the runtime created enables it (`enables.rs`).
-                    host_query_reset: owned,
-                    device_addresses: device_address,
-                    generated_commands: generated_commands.is_some(),
-                    sparse_binding: sparse.binds(),
-                    push_descriptor: push_descriptor.is_some(),
-                    calibration: calibrated.is_some(),
-                    object_names: object_name.is_some(),
-                    extended_dynamic_state: false,
-                    primitive_restart: false,
-                    color_write_masks: false,
-                    sized_index_bind: false,
-                    ycbcr_conversion: ycbcr_formats.primer().is_some(),
-                }),
+                priming_has,
                 generated_commands.as_ref(),
                 push_descriptor,
                 calibrated,
                 drawn,
                 ycbcr_formats.primer(),
+                priming_cache,
             )
         } {
             scheduler.stop();
@@ -1808,8 +1810,6 @@ impl Device {
             deferred: crate::render::DeferredEncoders::default(),
             record_executions,
             views_epoch: AtomicU64::new(0),
-            pipeline_recording: crate::warm::Recording::new(pipeline_records),
-            warmer: crate::warm::Warmer::default(),
             device_address,
             upload_alignment,
             dynamic_buffers: [
@@ -1892,7 +1892,6 @@ impl Device {
             heap_keys: Default::default(),
             rebinds: Default::default(),
             aliases: Default::default(),
-            host_ram: Default::default(),
             copied: Default::default(),
             #[cfg(test)]
             failing_host_imports: Default::default(),

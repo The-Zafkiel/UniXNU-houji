@@ -54,13 +54,44 @@ with tempfile.TemporaryDirectory(prefix='houji-inputs-') as directory:
     assert (bundle / 'NativeAdrenoMetal').read_bytes() == b'unchanged executable'
     builder.extract_debug_symbols(bundle, root)
     # Compile the actual shared policy used by both discovery paths. Default
-    # builds retain sysmem; the opt-in build still disables concurrent binning.
+    # builds retain the BGRA sysmem guard; autotune is an explicit comparison.
     command = ['clang++', '-std=c++17', '-I', str(ROOT / 'graphics/metal/AdrenoMetal'),
                str(ROOT / 'checks/turnip-policy.cpp'), '-o', str(root / 'turnip-policy')]
     for define, flags, mode in [(None, 'sysmem,nocb', 'sysmem'), (1, 'nocb', 'autotune')]:
-        subprocess.run(command + ([] if define is None else ['-DHOUJI_TURNIP_RENDER_AUTOTUNE=1']), check=True)
+        subprocess.run(command + ([] if define is None else ['-DHOUJI_TURNIP_RENDER_AUTOTUNE=' + str(define)]), check=True)
         subprocess.run([str(root / 'turnip-policy'), flags, mode], check=True)
     assert subprocess.run(command + ['-DHOUJI_TURNIP_RENDER_AUTOTUNE=2'], capture_output=True).returncode != 0
+    # Exercise the actual plugin's diagnostic setup, including trace-only and
+    # pixel-only flags and inherited settings that must be cleared when off.
+    plugin = (ROOT / 'graphics/metal/AdrenoMetal/NativeAdrenoMetalPlugin.mm').read_text()
+    setup = plugin[plugin.index('        if(!HOUJI_METAL_QUIET) {'):plugin.index('        if (strcmp(getprogname(), "backboardd")')]
+    fixture = r'''
+#include <cassert>
+#include <cstdlib>
+#include <cstring>
+#include "NativeTurnipPolicy.h"
+static unsigned flags;
+static bool bootArgSet(const char *name) {
+ return !strcmp(name,"sheng-diag=1") ? flags&1 : !strcmp(name,"sheng-gpu-trace=1") ? flags&2 : !strcmp(name,"sheng-gpu-pixels=1") ? flags&4 : 0;
+}
+int main() {
+ for(flags=0;flags<8;++flags) {
+  setenv("SHENG_DIAG","inherited",1);
+''' + setup + r'''
+  assert((getenv("SHENG_DIAG")!=nullptr)==bool(!HOUJI_METAL_QUIET && (flags || HOUJI_GPU_STAGE_TRACE)));
+  if(HOUJI_METAL_QUIET) {
+   assert(!getenv("NATIVE_METAL_JOURNAL") && !getenv("SHENG_LOG_GPU"));
+   assert(!strcmp(getenv("NATIVE_METAL_NO_LOG"),"1"));
+  }
+ }
+}
+'''
+    source = root / 'diagnostics.cpp'; source.write_text(fixture)
+    for enabled in (0, 1):
+        for quiet in (0, 1):
+            subprocess.run(['clang++', '-std=c++17', '-Wall', '-Werror', '-I', str(ROOT/'graphics/metal/AdrenoMetal'), '-DHOUJI_GPU_STAGE_TRACE='+str(enabled), '-DHOUJI_METAL_QUIET='+str(quiet), str(source), '-o', str(root/'diagnostics')], check=True)
+            subprocess.run([str(root/'diagnostics')], check=True)
 print('PASS: embedded shader lists are validated and stale/malformed/missing trial bindings stop the build')
 print('PASS: debug symbols stay outside the signed runtime bundle, including rebuilds')
 print('PASS: actual Turnip defaults, comparison policy, repeat setup and explicit environment; no GPU')
+print('PASS: actual plugin diagnostic setup preserves diag/trace/pixel-only requests and clears inherited diagnostics; no GPU')

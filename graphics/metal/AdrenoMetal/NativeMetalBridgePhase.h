@@ -11,7 +11,14 @@
 #include "bridge/NativeMetalObjects.h"
 #include "bridge/FrontendChecks.h"
 #include "NativeBridgeMetalFrontend.h"
+// Houji's existing display driver retains CPU scanout. Its wire ABI does not
+// provide the newer GopFramebuffer GPU handoff.
+#ifndef HOUJI_GPU_SCANOUT_HANDOFF
+#define HOUJI_GPU_SCANOUT_HANDOFF 0
+#endif
+#if HOUJI_GPU_SCANOUT_HANDOFF
 #include "GpuScanoutClient.h"
+#endif
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/mman.h>
@@ -87,6 +94,7 @@ static void *worker(void *arg) {
 // service. Reports on GPU7 only when the state changes: "P<step> e<hex>" (0 no connection, 1 no selector, 2 mode refused, 3 scanout not
 // mappable/importable, 4 serving), then "PF <frames>/<failures> r<last result> v<verified>/<differing rows> t<ms>" at the first frame, every fifth after
 // and the first failure, "PX ..." when serving stops. Returns when serving stops.
+#if HOUJI_GPU_SCANOUT_HANDOFF
 struct ScanoutContext {
     Gpu link;
     Gpu *marker;
@@ -141,6 +149,9 @@ static void serveScanout(Gpu &gpu, id device) {
     }
     streamText7(gpu, line);
 }
+#else
+static void serveScanout(Gpu &gpu,id device) {(void)gpu;(void)device;}
+#endif
 static void run(Gpu &gpu, const char *turnipPath) {
     gpu.mark(0x6500);
     Job *job = new Job{};

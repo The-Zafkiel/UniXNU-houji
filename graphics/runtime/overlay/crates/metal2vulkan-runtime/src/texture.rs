@@ -84,7 +84,7 @@ use super::image_plan::{
 use super::in_place::{self, PagesClass, Refusal, ShadowCause, Verdict};
 use super::key_hash::KeyMap;
 use super::linear_plan::{
-    aliases, check_linear_limits, holding, linear_lack, LinearImage, LinearLack,
+    aliases, check_linear_limits, holding, linear_lack, tile_store_fits, LinearImage, LinearLack,
 };
 use super::memory::{MemoryClass, Placement};
 use super::nan_clear;
@@ -187,33 +187,6 @@ pub(crate) use ycbcr_planes::KeptTexels;
 pub(crate) use attached_reads::feedback_candidate;
 pub use shared::SharedTextureHandle;
 pub use wrapped::{VkImageLayouts, WrappedImageProblem};
-
-// Opt-in diagnostic, never an ordinary rendering policy. Change only the
-// initial pattern of new optimized private 8-bit colour textures. If a UI
-// defect follows this marker, an unwritten initial texel reached that UI.
-// Written texels, clears, imported surfaces, depth and other formats keep
-// their original behavior. The builder gives this variant a distinct ID.
-static HOUJI_PATTERN_PROBE_PLANS: AtomicU64 = AtomicU64::new(0);
-fn houji_pattern_probe_enabled() -> bool {
-    matches!(option_env!("HOUJI_DIAGNOSTIC_FRESH_PATTERN"), Some("green"))
-}
-fn houji_pattern_probe(
-    pf: PixelFormat, levels: u32, pattern: heap_tiled::FreshPattern,
-) -> heap_tiled::FreshPattern {
-    if levels != 0 && houji_pattern_probe_enabled() && matches!(pf,
-        PixelFormat::RGBA8Unorm | PixelFormat::RGBA8UnormSRGB |
-        PixelFormat::BGRA8Unorm | PixelFormat::BGRA8UnormSRGB)
-    {
-        HOUJI_PATTERN_PROBE_PLANS.fetch_add(1, Ordering::Relaxed);
-        return heap_tiled::FreshPattern::Color {
-            texel: &[0, 255, 0, 255], color: Some([0.0, 1.0, 0.0, 1.0]),
-        };
-    }
-    pattern
-}
-pub(crate) fn houji_pattern_probe_statistics() -> [u64; 2] {
-    [houji_pattern_probe_enabled() as u64, HOUJI_PATTERN_PROBE_PLANS.load(Ordering::Relaxed)]
-}
 
 /// The kind of multisample image [`TextureState::sample_moves`] answers for.
 pub(super) type SampleMovesKey = (Format, PixelFormat, ImageUsageFlags, SampleCountFlags);
@@ -2218,123 +2191,144 @@ impl Device {
             }
             _ => false,
         };
-        let why = if texels.unit().extent != [1, 1] {
-            "native compressed block rows require a tracked shadow image".to_owned()
-        } else {
-            match class {
-                Some(_) if device_copy => String::new(),
-                Some(class) => {
-                    let checking = in_place::checking();
-                    let cause = if texels.buffer.detached() {
-                        // Over bytes detached from their pages (`detach.rs`) no image is bound to
-                        // them: the texture is their shadow, which presents a stand-in until they lie
-                        // in pages again.
-                        ShadowCause::Refused(
+        let why = match class {
+            Some(_) if device_copy => String::new(),
+            Some(class) => {
+                let checking = in_place::checking();
+                let cause = if texels.buffer.detached() {
+                    // Over bytes detached from their pages (`detach.rs`) no image is bound to
+                    // them: the texture is their shadow, which presents a stand-in until they lie
+                    // in pages again.
+                    ShadowCause::Refused(
                         Refusal::Detached,
                         "the buffer's bytes were detached from their pages (detach_backing) as the \
                          texture was made"
                             .to_owned(),
                     )
-                    } else if texels.buffer.copied() {
-                        // A copied host buffer's bytes the GPU uses lie in memory of the device's
-                        // own, no import of the pages (`copied.rs`): the shadow copies them, its
-                        // copies the buffer's uses, which commits copy in and completions merge back.
-                        ShadowCause::Refused(
-                            Refusal::Placement,
-                            "the buffer's bytes are a copy of the caller's pages in memory of the \
+                } else if texels.buffer.copied() {
+                    // A copied host buffer's bytes the GPU uses lie in memory of the device's
+                    // own, no import of the pages (`copied.rs`): the shadow copies them, its
+                    // copies the buffer's uses, which commits copy in and completions merge back.
+                    ShadowCause::Refused(
+                        Refusal::Placement,
+                        "the buffer's bytes are a copy of the caller's pages in memory of the \
                          device's own, which no image over the pages lies in"
-                                .to_owned(),
-                        )
-                    } else {
-                        // The check's own textures measure the device whatever its policy.
-                        let policy = match checking {
-                            true => HostPageTexturePolicy::InPlace,
-                            false => self.compile_device().policy().host_page_textures,
-                        };
-                        let verdict = |class| match checking {
-                            true => Verdict::Passed,
-                            false => self.in_place_verdict(class),
-                        };
-                        match in_place::in_place(policy, usage, class, verdict) {
-                            Ok(()) => {
-                                match self
-                                    .in_place_image(&plan, descriptor, &texels, class, &facts)?
-                                {
-                                    Ok((image, pitched)) => {
-                                        if !checking {
-                                            self.shared()
-                                                .counts
-                                                .host_texture_in_place(class, pitched);
-                                        }
-                                        return Ok(Storage::Alias { image, texels });
-                                    }
-                                    Err((refusal, why)) => ShadowCause::Refused(refusal, why),
-                                }
-                            }
-                            Err(cause) => cause,
-                        }
-                    };
-                    if checking {
-                        return Err(internal(
-                            "the in-place check's texture takes no image in place",
-                        ));
-                    }
-                    self.shared().counts.host_texture_shadowed(&cause);
-                    if class == PagesClass::Fresh {
-                        self.shared().counts.shadow_over_fresh_pages();
-                    }
-                    format!(
-                        "the buffer's bytes are {}, and {}",
-                        class.words(),
-                        cause.words()
+                            .to_owned(),
                     )
-                }
-                None => {
-                    // Whether an image may hold the texels: none where their rows (or slices) lie
-                    // with the buffer's bytes between them (`linear_plan::holding`), and else why.
-                    let holds = holding(&texels.layout, usage);
-                    // The usage the texture lacks, as for a texture of its own: plain Metal writes a
-                    // texture over a buffer made without `ShaderWrite` and reads one made without
-                    // `ShaderRead`. A linear image aliasing the buffer's memory takes it where one
-                    // with it still lies on Metal's layout there: a linear image is never
-                    // compressed, and its memory is the buffer's, so the usage costs it nothing.
-                    // Else the image without it, and else the shadow, with it where that costs the
-                    // shadow nothing.
-                    let wider =
-                        undeclared_usage(plan.clone(), layout, usage, &facts, |_, w| Ok(w))?;
-                    // The plans a linear image aliasing the bytes is tried with, the first the device
-                    // makes: with the feedback loop usage a draw takes that reads the texture its own
-                    // pass renders through a snapshot (`feedback_candidate`,
-                    // `texture/attached_reads.rs`), which costs a linear image nothing as the usage
-                    // the texture lacks does; then the usage the texture lacks; then the texture's
-                    // own.
-                    let feedback = feedback_candidate(&wider, self);
-                    let mut plans: Vec<&ImagePlan> = feedback.iter().collect();
-                    if wider != plan {
-                        plans.push(&wider);
-                    }
-                    plans.push(&plan);
-                    // An aliasing image, counted where it took the feedback loop usage.
-                    let alias = |image: Arc<Image>, texels: Arc<Texels>| {
-                        let usage = image.plan().usage;
-                        if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
-                            self.shared().counts.feedback_loop_alias_image();
-                        }
-                        Ok(Storage::Alias { image, texels })
+                } else {
+                    // The check's own textures measure the device whatever its policy.
+                    let policy = match checking {
+                        true => HostPageTexturePolicy::InPlace,
+                        false => self.compile_device().policy().host_page_textures,
                     };
-                    // Where no image aliases the bytes, the reason the plan's attempt gives is the
-                    // notice's.
-                    let over = (&*texels, &holds);
-                    for &wider in &plans[..plans.len() - 1] {
-                        let made = self.alias_image(wider.clone(), descriptor, over, &facts)?;
-                        if let Ok(image) = made {
-                            return alias(image, texels);
+                    // A written texture in place under `InPlaceWrites` is rendered by the
+                    // device's own texels alone, whatever its size: the driver renders a linear
+                    // image over a host allocation whose size is not whole tile blocks without
+                    // tile memory (the board's Turnip, `turnip-render-mode-for-attachment-memory`).
+                    // Its shadow merged every pass's writes back through a scratch of twice its
+                    // bytes (iPadOS 27's backboardd, a 3048x2032 RGBA16Float surface: 58 GB of
+                    // scratch in 613 passes).
+                    let verdict = |class| match checking {
+                        true => Verdict::Passed,
+                        false => self.in_place_verdict(class),
+                    };
+                    match in_place::in_place(policy, usage, class, verdict) {
+                        Ok(()) => {
+                            match self.in_place_image(&plan, descriptor, &texels, class, &facts)? {
+                                Ok((image, pitched)) => {
+                                    if !checking {
+                                        self.shared().counts.host_texture_in_place(class, pitched);
+                                    }
+                                    return Ok(Storage::Alias { image, texels });
+                                }
+                                Err((refusal, why)) => ShadowCause::Refused(refusal, why),
+                            }
                         }
+                        Err(cause) => cause,
                     }
-                    match self.alias_image(plan.clone(), descriptor, over, &facts)? {
-                        Ok(image) => return alias(image, texels),
-                        Err(why) => why,
+                };
+                if checking {
+                    return Err(internal(
+                        "the in-place check's texture takes no image in place",
+                    ));
+                }
+                self.shared().counts.host_texture_shadowed(&cause);
+                if class == PagesClass::Fresh {
+                    self.shared().counts.shadow_over_fresh_pages();
+                }
+                format!(
+                    "the buffer's bytes are {}, and {}",
+                    class.words(),
+                    cause.words()
+                )
+            }
+            None => {
+                // Whether an image may hold the texels: none where their rows (or slices) lie
+                // with the buffer's bytes between them (`linear_plan::holding`), and else why.
+                let mut holds = holding(&texels.layout, usage);
+                // Rows that lie apart alias the buffer's bytes, written too, under
+                // `HostPageTexturePolicy::InPlaceWrites`: the bytes between them are no texel's,
+                // and a program that pads its framebuffers (a window server's) keeps nothing
+                // there. A written texture's tile stores must stay within its rows
+                // (`linear_plan::tile_store_fits`). Rows that share bytes stay refused.
+                let policy = self.compile_device().policy().host_page_textures;
+                let writes = usage.intersects(
+                    TextureUsage::RENDER_TARGET
+                        | TextureUsage::SHADER_WRITE
+                        | TextureUsage::SHADER_ATOMIC,
+                );
+                if holds.is_err()
+                    && policy == HostPageTexturePolicy::InPlaceWrites
+                    && texels.layout.shared_bytes() == 0
+                    && (!writes
+                        || tile_store_fits(
+                            &texels.layout,
+                            u64::from(layout.extent[0]),
+                            texels.buffer.length(),
+                        ))
+                {
+                    holds = Ok(());
+                }
+                // The usage the texture lacks, as for a texture of its own: plain Metal writes a
+                // texture over a buffer made without `ShaderWrite` and reads one made without
+                // `ShaderRead`. A linear image aliasing the buffer's memory takes it where one
+                // with it still lies on Metal's layout there: a linear image is never
+                // compressed, and its memory is the buffer's, so the usage costs it nothing.
+                // Else the image without it, and else the shadow, with it where that costs the
+                // shadow nothing.
+                let wider = undeclared_usage(plan.clone(), layout, usage, &facts, |_, w| Ok(w))?;
+                // The plans a linear image aliasing the bytes is tried with, the first the device
+                // makes: with the feedback loop usage a draw takes that reads the texture its own
+                // pass renders through a snapshot (`feedback_candidate`,
+                // `texture/attached_reads.rs`), which costs a linear image nothing as the usage
+                // the texture lacks does; then the usage the texture lacks; then the texture's
+                // own.
+                let feedback = feedback_candidate(&wider, self);
+                let mut plans: Vec<&ImagePlan> = feedback.iter().collect();
+                if wider != plan {
+                    plans.push(&wider);
+                }
+                plans.push(&plan);
+                // An aliasing image, counted where it took the feedback loop usage.
+                let alias = |image: Arc<Image>, texels: Arc<Texels>| {
+                    let usage = image.plan().usage;
+                    if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
+                        self.shared().counts.feedback_loop_alias_image();
                     }
+                    Ok(Storage::Alias { image, texels })
+                };
+                // Where no image aliases the bytes, the reason the plan's attempt gives is the
+                // notice's.
+                let over = (&*texels, &holds);
+                for &wider in &plans[..plans.len() - 1] {
+                    let made = self.alias_image(wider.clone(), descriptor, over, &facts)?;
+                    if let Ok(image) = made {
+                        return alias(image, texels);
+                    }
+                }
+                match self.alias_image(plan.clone(), descriptor, over, &facts)? {
+                    Ok(image) => return alias(image, texels),
+                    Err(why) => why,
                 }
             }
         };
@@ -3300,7 +3294,6 @@ impl Device {
         if levels == 0 {
             return Ok(None);
         }
-        let pattern = houji_pattern_probe(pf, levels, pattern);
         let single = layout.samples == 1 && plan.usage.contains(ImageUsageFlags::TRANSFER_DST);
         let copies = |texel: &'static [u8]| -> Result<Pattern, Error> {
             let units = copy_units(plan.format, pf);
@@ -4934,6 +4927,30 @@ impl Texture {
         }
         self.0.heap.as_ref()?;
         self.heap_place().map(|place| place.size)
+    }
+
+    /// The bytes placed for this texture's backing image, for a native frontend's
+    /// `MTLResource.allocatedSize` accounting. This reports Vulkan storage rather
+    /// than Apple's texture layout. Heap textures use their allocated range;
+    /// buffer textures share their buffer's length. Unowned and sparse images
+    /// return zero because their allocation is not owned by this texture.
+    pub fn backing_allocation_size(&self) -> u64 {
+        if let Some(size) = self.allocated_size() {
+            return size;
+        }
+        if let Some(texels) = self.buffer_texels() {
+            return texels.buffer.length();
+        }
+        let Ok(image) = self.image() else {
+            return 0;
+        };
+        match &image.owner {
+            Owner::Runtime { placement, .. } => placement.size(),
+            Owner::HeapShadow(shadow) => shadow.placement.size(),
+            Owner::HeapUnaliased(unaliased) => unaliased.placement.size(),
+            Owner::ViewShadow(shadow) => shadow.placement.size(),
+            _ => 0,
+        }
     }
 
     /// `makeAliasable`: a heap texture's bytes may be another resource's from now on. An

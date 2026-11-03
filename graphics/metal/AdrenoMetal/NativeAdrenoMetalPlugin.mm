@@ -1,21 +1,26 @@
 // SPDX-License-Identifier: MIT
-// Adreno Metal plugin, reached through the original discovery (IOAcceleratorES -> MetalPluginName -> NSBundle -> principal class ->
-// initWithAcceleratorPort:). Default (stage 1): it runs the shared userspace GPU test (NativeAdrenoUserTest.h) from inside a real system
-// process, under that process's sandbox, and then returns nil. No device is registered, so the original software rendering keeps running unchanged.
-// Published (the image carries the file NativeAdrenoMetal.publish beside the bundle): backboardd, the one process that owns the GPU, returns the native
-// Metal frontend's device (the metal2vulkan runtime on Turnip, on the Adreno 740), which the original discovery registers; the CARenderServer then
-// renders the system UI through it, and the display driver's frames are written to the scanout by the GPU (GpuScanoutClient.h). Another process
-// gets its own native device (its own driver connection, GPU address window and shader cache) when its name is listed in the file
-// NativeAdrenoMetal.clients beside the bundle ("*" lists every process); an unlisted one returns nil. A caller may fall back to OpenGL,
-// which is not implemented here; returning nil does not guarantee a working software renderer (Preferences notification icons).
+// Houji Metal discovery: explicit NativeAdrenoMetal.clients selects backboardd
+// and its listed clients. The frontend uses the matching metal2vulkan/Turnip
+// stack over the A750 kernel transport. Discovery never runs an A740 raw-PM4
+// self-test and does not require a .publish marker on the houji image.
 #import <Foundation/Foundation.h>
+#include "SharedShaderCache.h"
 #include <pthread.h>
+#include <algorithm>
+#include <thread>
 #include <dlfcn.h>
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#endif
 #include <unistd.h>
 #include <pwd.h>
-#include <sys/stat.h>
+#include <fts.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <mach/mach.h>
+#include <sys/sysctl.h>
+#include <libkern/OSCacheControl.h>
 #include <objc/message.h>
 #include "NativeAdrenoUserTest.h"
 #include "NativeMetalBridgePhase.h"
@@ -50,10 +55,7 @@ static bool requestedPath(const char *name, char *path, size_t size) {
     snprintf(slash + 1, size - size_t(slash + 1 - path), "%s", name);
     return access(path, R_OK) == 0;
 }
-static bool requested() {
-    char path[1024];
-    return requestedPath("NativeAdrenoMetal.publish", path, sizeof path);
-}
+
 static Gpu *makeGpu(unsigned port) {
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL);
     if (!iokit) return nullptr;
@@ -69,9 +71,112 @@ static Gpu *makeGpu(unsigned port) {
 static std::string gCacheDirectory;   // the runtime's cache directory (the one that opened the device), exported by CacheExport.h
 // Progress markers 0x68xx (GPU6): 6800 entered, 6801 Turnip found, 6802 device made, 6803 returned to the discovery, 68f1 no Turnip, 68f2 no device.
 static unsigned gDiagBits;
-// iOS 16: upstream QuartzCore offsets belong to iPadOS 17 and must never be used here.
-static void reportDisplayState(Gpu &gpu) { (void)gpu; }
-// Whether NativeAdrenoMetal.clients names this process (names separated by blanks, commas or new lines; "*" names every process).
+// Reads of the render server's own state for the framebuffer-format question (diagnostic only, for the exact QuartzCore of the target image; a read
+// that fails or a build that differs reports zeros). Each value is one marker, 0x7Kvv: K picks the item, vv the value.
+static bool bootArgSet(const char *key) {
+    char args[1100] = {};
+    size_t size = sizeof args - 1;
+    return sysctlbyname("kern.bootargs", args, &size, nullptr, 0) == 0 && strstr(args, key);
+}
+static void reportDisplayState(Gpu &gpu) {(void)gpu;} // iOS16: no offsets from another OS cache.
+// Every process other than the render server: the same runtime on its own connection, with none of the render server's threads (no
+// display hand-off, telemetry, benchmark or cache export). Its shader cache lives in its own cache or temp directory.
+// The reason a client's device failed, as a text line the driver keeps per process (the render server's report row is rewritten every ten seconds):
+// "<step> <detail>", through the marker stream (a connection is not needed). The Gpu object is made only on this path.
+// Deletes every "*.import" file under `root`: the copying import of an earlier image wrote each file beside its place and renamed it only
+// once the whole pack was read; a boot that ended first left them all there.
+static void removeHalfImported(const char *root) {
+    char *paths[] = {const_cast<char *>(root), nullptr};
+    FTS *fts = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV, nullptr);
+    if (!fts) return;
+    while (FTSENT *e = fts_read(fts))
+        if (e->fts_info == FTS_F && e->fts_namelen > 7 && !strcmp(e->fts_name + e->fts_namelen - 7, ".import")) unlink(e->fts_path);
+    fts_close(fts);
+}
+// Bounded startup evidence survives a refused device before its pipeline journal opens.
+static char gStartupDirectory[512];
+static unsigned gStartupRows;
+static void startupDirectory(const char *path) {
+    if(gStartupDirectory[0] || !path || !*path)return;
+    struct stat st={};
+    if(!lstat(path,&st) && S_ISDIR(st.st_mode) && st.st_uid==getuid() && !(st.st_mode&0077))
+        strlcpy(gStartupDirectory,path,sizeof gStartupDirectory);
+}
+static void startupLog(const char *step,const char *detail) {
+    if(HOUJI_METAL_QUIET)return;
+    if(!gStartupDirectory[0] || __sync_fetch_and_add(&gStartupRows,1)>=32)return;
+    char path[640];snprintf(path,sizeof path,"%s/initialization.log",gStartupDirectory);
+    struct stat st={};
+    if(!lstat(path,&st) && (!S_ISREG(st.st_mode) || st.st_uid!=getuid() || (st.st_mode&0077) || st.st_size>=24576))return;
+    int fd=open(path,O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW,0600);
+    if(fd<0)return;
+    char line[768];const int n=snprintf(line,sizeof line,"pid=%d process=%s step=%.40s detail=%.600s\n",getpid(),getprogname(),step,detail?detail:"");
+    if(n>0)(void)!write(fd,line,std::min((size_t)n,sizeof line-1));
+    close(fd);
+}
+// ABI v1 has no upstream telemetry-marker transport. Retain bounded snapshots
+// in the already verified cache directory; no disk writes on render threads.
+static void diagnosticLog(const char *text,size_t length) {
+    if(HOUJI_METAL_QUIET)return;
+    static unsigned samples;
+    if(!gStartupDirectory[0] || !text || !length || samples++>=32)return;
+    char path[640];snprintf(path,sizeof path,"%s/telemetry-%d.log",gStartupDirectory,getpid());
+    int fd=open(path,O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW,0600);
+    if(fd<0)return;
+    struct stat st={};
+    if(fstat(fd,&st) || !S_ISREG(st.st_mode) || st.st_uid!=getuid() || (st.st_mode&0077) || st.st_size>256*1024-6656){close(fd);return;}
+    char heading[512];const int n=snprintf(heading,sizeof heading,"pid=%d uptime-us=%llu TU_DEBUG=%.128s\n",getpid(),
+        (unsigned long long)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)/1000),getenv("TU_DEBUG")?:"unset");
+    if(n>0)(void)!write(fd,heading,std::min((size_t)n,sizeof heading-1));
+    (void)!write(fd,text,std::min(length,(size_t)6144));
+    close(fd);
+}
+static unsigned gClientPort;
+static void clientFailure(unsigned port, const char *step, const char *detail) {
+    if(HOUJI_METAL_QUIET)return;
+    if (Gpu *gpu = makeGpu(port)) {
+        // The row holds 63 characters: the common prefix goes, and a long reason keeps its start (what was refused) and its end (why).
+        if (!detail) detail = "";
+        if (!strncmp(detail, "native-metal: ", 14)) detail += 14;
+        char shown[48];
+        const size_t length = strlen(detail);
+        if (length <= 46) strlcpy(shown, detail, sizeof shown);
+        else snprintf(shown, sizeof shown, "%.18s~%s", detail, detail + length - 27);
+        char text[64];
+        snprintf(text, sizeof text, "%.14s %s", step, shown);
+        streamText(*gpu, text);
+        // A refusal's text is what says why a client ends (iconservicesagent's pipeline refusal showed 18 characters of it): the rest of it
+        // follows in rows of its own, up to six, each 46 characters.
+        if (!strcmp(step, "problem") && length > 46)
+            for (unsigned part = 1, at = 46; part <= 6 && at < length; ++part, at += 46) {
+                // The log keeps the latest text row only: each part follows the one before it by 4 s so a sample catches every one.
+                std::string row = "problem" + std::to_string(part) + " " + std::string(detail + at).substr(0, 46);
+                auto *target = gpu;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(part) * 4 * NSEC_PER_SEC),
+                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{streamText(*target, row.c_str());});
+            }
+    }
+}
+// Each process's own render passes, as its Turnip recorded them (NativeBridgeMetalFrontend.mm): the slowest one's size, format and draw
+// count and the pass total, on the client's text line every 10 s while the diagnostics are on. A client whose jobs each took 77 ms showed
+// only that; which pass and at what size is what says whether the cost is the driver's.
+extern "C" size_t nmb_slowest_pass(char *out, size_t size) __attribute__((weak));
+static void startPassReporter(unsigned port) {
+    if (!getenv("SHENG_DIAG") || !&nmb_slowest_pass) return;
+    static std::atomic<bool> started{false};
+    if (started.exchange(true)) return;
+    Gpu *gpu = makeGpu(port);
+    if (!gpu) return;
+    std::thread([gpu]{
+        pthread_setname_np("pass-reporter");
+        for (;;) {
+            sleep(5);
+            char row[200];
+            if (!nmb_slowest_pass(row, sizeof row) || !row[0]) continue;
+            streamText(*gpu, row);
+        }
+    }).detach();
+}
 static bool listedClient() {
     char path[1024];
     if (!requestedPath("NativeAdrenoMetal.clients", path, sizeof path)) return false;
@@ -86,36 +191,7 @@ static bool listedClient() {
         if (!strcmp(name, "*") || !strcmp(name, self)) return true;
     return false;
 }
-// A listed process other than the render server: the same runtime on its own connection, with none of the render server's threads (no
-// display hand-off, telemetry, benchmark or cache export). Its shader cache lives in its own cache or temp directory.
-// The reason a client's device failed, as a text line the driver keeps per process (the render server's report row is rewritten every ten seconds):
-// "<step> <detail>", through the marker stream (a connection is not needed). The Gpu object is made only on this path.
-static unsigned gClientPort;
-static char gClientLogDirectory[512];
-static unsigned gClientLogRows;
-static void clientFailure(unsigned port, const char *step, const char *detail) {
-    // This is ordinary per-process userspace IO, bounded to 32 initialization
-    // rows. Keep the full failure detail even when the kernel's short row is
-    // overwritten or the final kernel checkpoint cannot be committed.
-    if(gClientLogDirectory[0] && __sync_fetch_and_add(&gClientLogRows,1)<32){
-        char path[640];snprintf(path,sizeof path,"%s/initialization.log",gClientLogDirectory);
-        struct stat st={};
-        const bool absent=lstat(path,&st)!=0;
-        if(absent || (S_ISREG(st.st_mode) && st.st_uid==getuid() && !(st.st_mode&0077) && st.st_size<24576)){
-            int fd=open(path,O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW,0600);
-            if(fd>=0){
-                char row[768];int n=snprintf(row,sizeof row,"pid=%d process=%s step=%.40s detail=%.600s\n",getpid(),getprogname(),step,detail?detail:"");
-                if(n>0)write(fd,row,(size_t)n<sizeof row?(size_t)n:sizeof row-1);
-                close(fd);
-            }
-        }
-    }
-    if (Gpu *gpu = makeGpu(port)) {
-        char text[64];
-        snprintf(text, sizeof text, "%.14s %.46s", step, detail ? detail : "");
-        streamText(*gpu, text);
-    }
-}
+
 static id clientDevice(unsigned port) {
     if (!listedClient()) return nil;
     char turnip[1024];
@@ -130,52 +206,50 @@ static id clientDevice(unsigned port) {
     char candidates[3][512] = {};
     if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16)) candidates[0][0] = 0;
     if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16)) candidates[1][0] = 0;
-    // Houji's development root has no Darwin per-user directory service yet.
-    // Keep the regular locations first, then use a separate owned directory
-    // for each explicitly listed mobile process. Never share another client's
-    // shader cache or select a root-owned, symlinked or world-writable path.
-    const char *self=getprogname();
-    bool safeName=self && self[0] && strlen(self)<64;
-    for(const char *p=self;safeName && *p;++p)
-        if(!((*p>='a' && *p<='z') || (*p>='A' && *p<='Z') || (*p>='0' && *p<='9') || *p=='_' || *p=='-'))safeName=false;
-    struct stat parent={};
-    const char *base="/private/var/mobile/Library/Caches";
-    if(getuid()==501 && safeName && !lstat(base,&parent) && S_ISDIR(parent.st_mode) &&
-       parent.st_uid==getuid() && !(parent.st_mode&0022))
-        snprintf(candidates[2],sizeof candidates[2],"%s/m2v-houji-%s",base,self);
+    strlcpy(candidates[2], sharedShaderCacheDirectory().c_str(), sizeof candidates[2]);
     id device = nil;
     const char *lastError = "";
     unsigned usable = 0;
-    for (unsigned i = 0; i < 3 && !device; ++i) {
+    for (unsigned i : {2u, 0u, 1u}) {
+        if (device) break;
         if (!candidates[i][0]) continue;
-        if(i<2)strlcat(candidates[i], "m2v", sizeof candidates[i]);
+        if (i != 2) strlcat(candidates[i], "m2v", sizeof candidates[i]);
         mkdir(candidates[i], 0700);
-        if(i==2){
-            struct stat directory={};
-            if(lstat(candidates[i],&directory) || !S_ISDIR(directory.st_mode) ||
-               directory.st_uid!=getuid() || (directory.st_mode&0077))continue;
-        }
         if (access(candidates[i], W_OK) != 0) continue;
         ++usable;
-        strlcpy(gClientLogDirectory,candidates[i],sizeof gClientLogDirectory);
-        clientFailure(port,"try-cache",candidates[i]);
         @try {
-            device = native_bridge_metal_open(turnip, candidates[i], registryID, nullptr);
+            startupDirectory(candidates[i]);startupLog("open-cache",candidates[i]);
+            startupLog("turnip-policy",getenv("TU_DEBUG"));
+                device = native_bridge_metal_open(turnip, candidates[i], registryID, nullptr);
+                startupLog(device?"device-ready":"device-refused",device?nmb_runtime_build():nmb_last_error());
         } @catch (NSException *exception) {
             device = nil;
             lastError = "exception";
-            clientFailure(port,"exception",exception.description.UTF8String);
         }
         if (!device && !lastError[0]) lastError = nmb_last_error();
-        if(device){
-            gClientPort=port;
-            native_bridge_metal_problem_hook=[](const char *problem){clientFailure(gClientPort,"problem",problem);};
-            clientFailure(port,"device-ready",i==2?"mobile owned cache fallback":"Darwin user cache");
-            char firstProblem[512]={};
-            if(native_bridge_metal_first_problem(firstProblem,sizeof firstProblem)&&firstProblem[0])clientFailure(port,"first-problem",firstProblem);
+    }
+    if (!device && !usable) {
+        setenv("METAL2VULKAN_SHADER_CACHE_OPTIONAL", "1", 1);
+        const char *path = candidates[0][0] ? candidates[0] : candidates[1][0] ? candidates[1] : "/var/mobile/tmp/m2v";
+        @try {
+            device = native_bridge_metal_open(turnip, path, registryID, nullptr);
+        } @catch (NSException *exception) {
+            device = nil;
+            lastError = "exception";
         }
+        if (!device && !lastError[0]) lastError = nmb_last_error();
     }
     if (!device) clientFailure(port, usable ? "no-device" : "no-cachedir", lastError);
+    // The client's first problem, once, on the same text line, sent from the thread that hit it: WidgetRenderer crashed on a nil render
+    // encoder with no reason anywhere readable (its own log lines need the plugin's format strings, which the device does not keep), and a
+    // once-a-second reader never ran before the crash (i568).
+    if (device) {
+        gClientPort = port;
+        startPassReporter(port);
+        native_bridge_metal_problem_hook = [](const char *problem) {clientFailure(gClientPort, "problem", problem);};
+        char problem[200] = {};
+        if (native_bridge_metal_first_problem(problem, sizeof problem) && problem[0]) clientFailure(port, "problem", problem);
+    }
     return device;
 }
 static id deviceForPort(unsigned port) {
@@ -184,17 +258,49 @@ static id deviceForPort(unsigned port) {
     @synchronized([NativeAdrenoMetalDeviceBase class]) {
         if (tried) return device;
         tried = true;
-        exceptiondiag::start(); // the throw site of an uncaught exception, for the kernel's THROW row (ExceptionDiag.h)
-        // The default retains the established system-memory path. A comparison
-        // build may let Turnip select GMEM; both defaults disable concurrent
-        // binning, including the binning emitted for system-memory passes.
+        if(!HOUJI_METAL_QUIET)exceptiondiag::start(); // diagnostic only
+        // No concurrent binning in any Metal process: with it BV ran ahead of BR and the two stopped waiting on each other inside a pass
+        // (int-261p, int-262, and in system memory int-265). Without it Turnip's autotune picks tile memory (GMEM) or system memory per
+        // pass: i553 forced system memory for every pass, the GPU busy 19 % at 680 MHz. A tile store writes whole 16x4 blocks, which the
+        // runtime keeps within a texture's rows (bridge patch 0016).
+        if (FILE *flags = fopen("/private/var/ngpu/tu_debug", "r")) {
+            char line[128] = {};
+            if (fgets(line, sizeof line, flags)) {line[strcspn(line, "\n")] = 0; setenv("TU_DEBUG", line, 1);}
+            fclose(flags);
+        }
+        // sheng-tu-debug=<flags>: TU_DEBUG for every Metal process (an experiment: sysmem renders without GMEM load and store, gmem always with them).
+        {
+            char args[1100] = {};
+            size_t size = sizeof args - 1;
+            if (sysctlbyname("kern.bootargs", args, &size, nullptr, 0) == 0)
+                if (const char *at = strstr(args, "sheng-tu-debug=")) {
+                    char value[64] = {};
+                    strlcpy(value, at + 15, sizeof value);
+                    value[strcspn(value, " ")] = 0;
+                    setenv("TU_DEBUG", value, 1);
+                }
+        }
+        // Every pass renders in system memory with the 8-bit BGRA framebuffer (sheng-fb-bgra=1): measured against tile memory with the swap of
+        // GMEM loads and stores fixed (patches/mesa/turnip-gmem-mutable-swap.patch, lock screen 99.5 % equal to the RGhA picture), the GPU time per
+        // command buffer was no better (17.8 ms mean and 56.1 ms at p95 in tile memory, 17.1 and 52.1 in system memory), and one home screen frame
+        // still came out with red and blue exchanged. sheng-tu-debug= overrides this for experiments.
         houji_turnip::configure();
+        // sheng-diag=1 turns on every diagnostic of the GPU stack in this process: the frontend's frame trace, Turnip's pass stamps and
+        // submission ring, the runtime's stage ring, and in the render server the status and telemetry lines. Without it none of them runs.
+        if(!HOUJI_METAL_QUIET) {
+        if (bootArgSet("sheng-diag=1") || bootArgSet("sheng-gpu-trace=1") || bootArgSet("sheng-gpu-pixels=1")) setenv("SHENG_DIAG", "1", 1);
+        else unsetenv("SHENG_DIAG");
+        if (bootArgSet("sheng-gpu-trace=1")) setenv("SHENG_GPU_TRACE", "1", 1);
+        if (bootArgSet("sheng-gpu-pixels=1")) setenv("SHENG_GPU_PIXELS", "1", 1);
+        if (bootArgSet("sheng-wallpaper-freeze=1")) setenv("NATIVE_METAL_FREEZE_WALLPAPER", "1", 1);
 #if HOUJI_GPU_STAGE_TRACE
-        if (!strcmp(getprogname(), "backboardd")) setenv("HOUJI_GPU_TRACE", "1", 1);
-        else unsetenv("HOUJI_GPU_TRACE");
-#else
-        unsetenv("HOUJI_GPU_TRACE");
+        setenv("SHENG_DIAG", "1", 1);
 #endif
+        // log-gpu=1: the GPU stack's log lines (NSLog, the pipeline journal); off without it.
+        if (bootArgSet("log-gpu=1")) setenv("SHENG_LOG_GPU", "1", 1);
+        else unsetenv("SHENG_LOG_GPU");
+        setenv("NATIVE_METAL_JOURNAL", "1", 1); // bounded pipeline creation records, no CPU sampler
+        } else houji_turnip::disableDiagnostics();
         if (strcmp(getprogname(), "backboardd") != 0) return device = clientDevice(port);
         // The discovery releases the accelerator port when it is done; the monitor and the scanout client keep using it.
         if (void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL)) {
@@ -236,11 +342,13 @@ static id deviceForPort(unsigned port) {
         }
         // The render server compresses its framebuffer (an Apple/AGX layout this GPU does not write) unless told not to; the display driver takes plain rows.
         setenv("CA_DISABLE_FRAMEBUFFER_COMPRESSION", "1", 1);
-        // The runtime's creation log reports each VkPipeline making's time to the device's sink, which the telemetry's V row sums.
-        setenv("METAL2VULKAN_LOG_PIPELINES", "1", 0);
+
+        // The runtime's creation log reports each VkPipeline making's time to the device's sink, which the telemetry's V row sums
+        // (sheng-diag=1).
+        if (getenv("SHENG_DIAG")) setenv("METAL2VULKAN_LOG_PIPELINES", "1", 0);
         CFPreferencesSetAppValue(CFSTR("CAEnableFramebufferCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
         CFPreferencesSetAppValue(CFSTR("CAEnableIOSurfaceCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
-        char candidates[5][512] = {};
+        char candidates[6][512] = {};
         if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16)) candidates[0][0] = 0;
         if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16)) candidates[1][0] = 0;
         strlcpy(candidates[2], "/tmp/", sizeof candidates[2]);
@@ -253,13 +361,19 @@ static id deviceForPort(unsigned port) {
             mkdir(candidates[4], 0700);
             strlcat(candidates[4], "/", sizeof candidates[4]);
         }
-        static const unsigned order[] = {4, 0, 1, 2, 3};
+        strlcpy(candidates[5], sharedShaderCacheDirectory().c_str(), sizeof candidates[5]);
+        static const unsigned order[] = {5, 4, 0, 1, 2, 3};
         for (unsigned i : order) {
             if (device) break;
             if (!candidates[i][0]) continue;
-            strlcat(candidates[i], "m2v", sizeof candidates[i]);
+            if (i != 5) strlcat(candidates[i], "m2v", sizeof candidates[i]);
             mkdir(candidates[i], 0700);
             if (access(candidates[i], W_OK) != 0) continue;
+            // Files an earlier image's copying import left half written here (int 590aaee2), which hold memory of the Data disk.
+            {
+                static bool once;
+                if (!once && i != 5) {once = true; removeHalfImported(candidates[i]);}
+            }
             // The image's pipeline pack (an earlier boot's export), into this directory before the runtime reads it. Marker 0x6Cnn: files written
             // (saturated at 0xfe), 0x6Cff the pack was refused.
             if (char pack[1024]; requestedPath("NativeAdrenoMetal.m2vpack", pack, sizeof pack)) {
@@ -267,7 +381,10 @@ static id deviceForPort(unsigned port) {
                 if (imported) gpu->mark(0x6C00 | (imported < 0 ? 0xff : imported > 0xfe ? 0xfe : imported));
             }
             @try {
-                device = native_bridge_metal_open(turnip, candidates[i], registryID, nullptr);
+                startupDirectory(candidates[i]);startupLog("open-cache",candidates[i]);
+                startupLog("turnip-policy",getenv("TU_DEBUG"));
+            device = native_bridge_metal_open(turnip, candidates[i], registryID, nullptr);
+            startupLog(device?"device-ready":"device-refused",device?nmb_runtime_build():nmb_last_error());
             } @catch (NSException *exception) {
                 device = nil;
             }
@@ -280,18 +397,16 @@ static id deviceForPort(unsigned port) {
             streamText(*gpu, text);
             return nil;
         }
-        gClientPort=port;
-        native_bridge_metal_problem_hook=[](const char *problem){clientFailure(gClientPort,"problem",problem);};
-        char firstProblem[200]={};
-        if(native_bridge_metal_first_problem(firstProblem,sizeof firstProblem)&&firstProblem[0])clientFailure(port,"problem",firstProblem);
         gpu->mark(0x6802);
-        // The status line (GPU8) every ten seconds, and the display hand-off client on its own thread: both only read or serve, neither is the discovery's.
-        pthread_t monitor;
+        // The status line (GPU8) every ten seconds (sheng-diag=1), and the display hand-off client on its own thread: both only read or serve,
+        // neither is the discovery's.
+        pthread_t monitor, scanout;
         pthread_attr_t attributes;
         pthread_attr_init(&attributes);
         pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
         pthread_attr_setstacksize(&attributes, 1u << 20);
-        pthread_create(&monitor, &attributes, [](void *arg) -> void * {
+        const bool diag = getenv("SHENG_DIAG") != nullptr;
+        if(!HOUJI_METAL_QUIET)pthread_create(&monitor, &attributes, [](void *arg) -> void * {
             Gpu *g = static_cast<Gpu *>(arg);
             for (;;) {
                 sleep(10);
@@ -317,55 +432,51 @@ static id deviceForPort(unsigned port) {
             return nullptr;
         }, gpu);
         pthread_t telemetry;
-        pthread_create(&telemetry, &attributes, [](void *arg) -> void * {
-            Gpu *g = static_cast<Gpu *>(arg);
+        if (diag) pthread_create(&telemetry, &attributes, [](void *arg) -> void * {
+            (void)arg;
             sleep(5);
-            // The bridge's telemetry table, resent whole every four seconds as markers (two characters each): 0xC000|row starts a row of the
-            // kernel's table, 0x8000|(a<<7)|b appends two characters. Rows are at most 90 characters; 48 rows.
+            // Keep the bridge's existing telemetry in a bounded text journal;
+            // houji ABI v1 cannot transport the upstream v2 marker table.
             for (;;) {
                 static char table[6144];
-                native_bridge_metal_telemetry(table, sizeof table);
-                unsigned row = 0;
-                for (char *line = table; *line && row < 48;) {
-                    char *end = strchr(line, '\n');
-                    if (end) *end = 0;
-                    g->mark(0xC000u | row);
-                    const size_t length = strlen(line) < 90 ? strlen(line) : 90;
-                    for (size_t i = 0; i < length; i += 2) {
-                        const unsigned a = (unsigned char)line[i] & 0x7f, b = i + 1 < length ? (unsigned char)line[i + 1] & 0x7f : 0;
-                        g->mark(0x8000u | (a << 7) | b);
-                    }
-                    ++row;
-                    if (!end) break;
-                    line = end + 1;
-                }
+                const size_t length=native_bridge_metal_telemetry(table, sizeof table);
+                diagnosticLog(table,length);
                 sleep(6);
             }
             return nullptr;
         }, gpu);
-        // houji retains its qualified CPU scanout. Its NativeGOP handoff is not implemented.
-        char exportPath[1024];
-        if(requestedPath("NativeAdrenoMetal.cacheexport",exportPath,sizeof exportPath)){
-        pthread_t exporter;
-        pthread_create(&exporter, &attributes, [](void *arg) -> void * {
-            cacheexport::run(*static_cast<Gpu *>(arg), gCacheDirectory);
+        pthread_create(&scanout, &attributes, [](void *arg) -> void * {
+            Gpu *g = static_cast<Gpu *>(arg);
+            sleep(3);
+            @try {
+                (void)g; // Board display ABI has no GPU scanout handoff.
+            } @catch (NSException *exception) {
+                g->mark(0x68f3);
+            }
             return nullptr;
         }, gpu);
+        // The cache directory's export to the UFS log only when NativeAdrenoMetal.cacheexport sits beside the bundle: Data persists across
+        // boots now, so the caches no longer need the trip through the host, and once priming has filled the directory, every rescan and
+        // export competed with the render server (int-245: the scanning thread at 45% CPU, the sending one at 48%, frames twice as slow).
+        char exportPath[1024];
+        if (requestedPath("NativeAdrenoMetal.cacheexport", exportPath, sizeof exportPath)) {
+            pthread_t exporter;
+            pthread_create(&exporter, &attributes, [](void *arg) -> void * {
+                cacheexport::run(*static_cast<Gpu *>(arg), gCacheDirectory);
+                return nullptr;
+            }, gpu);
         }
         // Every Metal library of the OS through the runtime, 90 s after the render server opened the device (PrimeShaders.h); the boots that froze
         // or crashed before three minutes never primed anything. Progress is kept in the Data cache directory, so later boots resume.
         // The translator recurses deeply on large functions: give it the stack of a main thread.
         pthread_attr_setstacksize(&attributes, 8u << 20);
         pthread_t primer;
-        char primePath[1024];
-        if(requestedPath("NativeAdrenoMetal.primelist",primePath,sizeof primePath) || !prime::embeddedLines().empty()){
-        pthread_create(&primer, &attributes, [](void *) -> void * {
-            char list[1024];
-            prime::run((id<MTLDevice>)device, gCacheDirectory, 90,
-                       requestedPath("NativeAdrenoMetal.primelist", list, sizeof list) ? std::string(list) : std::string());
-            return nullptr;
-        }, nullptr);
-        }
+        if (bootArgSet("houji-gpu-prime=1")) pthread_create(&primer, &attributes, [](void *) -> void * {
+                char list[1024];
+                prime::run((id<MTLDevice>)device, gCacheDirectory, 90,
+                           requestedPath("NativeAdrenoMetal.primelist", list, sizeof list) ? std::string(list) : std::string());
+                return nullptr;
+            }, nullptr);
         pthread_attr_destroy(&attributes);
         gpu->mark(0x6803);
         return device;

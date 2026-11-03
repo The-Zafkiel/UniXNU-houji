@@ -660,11 +660,8 @@ impl CommandBufferShared {
             barriers.first().is_some_and(Option::is_some) || !held_moves.transitions(0).is_empty();
         if entry.is_some() {
             started = true;
-            let globals: Vec<Barrier> = completed_barrier
-                .take()
-                .into_iter()
-                .chain(entry_barrier)
-                .collect();
+            let (pair, count) = barrier_pair(completed_barrier.take(), entry_barrier);
+            let globals = &pair[..count];
             let stamps = Stamps {
                 start: start_stamp.filter(|_| !encoder_behind),
                 after: entry_barrier.is_some(),
@@ -673,14 +670,11 @@ impl CommandBufferShared {
             if stamps.start.is_some() {
                 start_stamp = None;
             }
-            work.push(self.record_barriers(&mut state, &globals, &entries, stamps)?);
+            work.push(self.record_barriers(&mut state, globals, &entries, stamps)?);
         }
         for (offset, barrier) in barriers.iter().enumerate() {
-            let globals: Vec<Barrier> = completed_barrier
-                .take()
-                .into_iter()
-                .chain(*barrier)
-                .collect();
+            let (pair, count) = barrier_pair(completed_barrier.take(), *barrier);
+            let globals = &pair[..count];
             let moves = held_moves.transitions(offset);
             if !globals.is_empty() || start_stamp.is_some() || !moves.is_empty() {
                 started |= offset == 0;
@@ -690,7 +684,7 @@ impl CommandBufferShared {
                     end: None,
                 };
                 let kept = &mut scheduler.kept;
-                work.push(self.barrier_buffer(&mut state, kept, at, &globals, moves, stamps)?);
+                work.push(self.barrier_buffer(&mut state, kept, at, globals, moves, stamps)?);
             }
             work.extend(&state.recorded[start + offset].raws);
         }
@@ -903,6 +897,9 @@ impl CommandBufferShared {
                 false => work.insert(0, lead),
             }
         }
+        for command in work.iter().chain(finale.iter()) {
+            crate::stage_trace::diagnostic_link(Arc::as_ptr(self) as u64, ash::vk::Handle::as_raw(*command), index as u64);
+        }
         let mut work_timeline = vk::TimelineSemaphoreSubmitInfo::default()
             .wait_semaphore_values(wait_values)
             .signal_semaphore_values(work_signal_values);
@@ -1069,14 +1066,8 @@ impl CommandBufferShared {
                 shared.interop.wrapped.forget(image);
             }
         }
-        // Its signals are seen at its completion turn alone where it may write a copied host
-        // buffer, whose bytes reach the pages there (`event_timeline.rs`).
-        let behind_merge = !kept.is_empty() && shared.copied.any();
-        if behind_merge {
-            shared.counts.event_signals_behind_merge(kept.len());
-        }
         for (event, signal, value) in &kept {
-            event.keep(*signal, *value, queue, behind_merge);
+            event.keep(*signal, *value, queue);
         }
         // Its commands may reach every texture through its resource ID where one bound a heap
         // set: the stale-reach degrade's trigger decides (`detach.rs`).
@@ -1456,4 +1447,16 @@ impl Stamps {
             end: self.end.is_some(),
         })
     }
+}
+
+/// `lead` then `barrier`, those of them there are, as the first `.1` of the array: the globals
+/// of a barrier between a batch's encoders, which takes no allocation.
+fn barrier_pair(lead: Option<Barrier>, barrier: Option<Barrier>) -> ([Barrier; 2], usize) {
+    let mut pair = [Barrier::default(); 2];
+    let mut count = 0;
+    for b in lead.into_iter().chain(barrier) {
+        pair[count] = b;
+        count += 1;
+    }
+    (pair, count)
 }

@@ -11,10 +11,14 @@
 #[path = "NativeMetalObjects.rs"]
 pub mod objects;
 
+// The system allocator: mimalloc reserved its arenas with large mmaps, and on iPadOS 27 the kernel stopped the render server and
+// SpringBoard with an exception inside that mmap (unix_mmap_prim_aligned from mi_arena_reserve), so the shell resprung.
+
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, CommandBuffer, CommandBufferStatus, Device, DeviceOptions, HostMemory, LoadAction, Origin, PipelineOptions, RenderPassDescriptor, ResourceOptions, Size, StoreAction, TextureDescriptor,
+    BlitOption, ClearColor, CommandBuffer, CommandBufferStatus, Device, DeviceOptions, HostMemory, LoadAction,
+    Origin, PipelineOptions, RenderPassDescriptor, ResourceOptions, Size, StoreAction, TextureDescriptor,
 };
 use std::ffi::{c_char, c_void, CStr};
 use std::path::PathBuf;
@@ -23,14 +27,6 @@ use std::time::Duration;
 
 /// The runtime's own example library (validation/fixtures/public/examples/runtime_examples.ll), assembled to AIR at build time.
 static FIXTURE_AIR: &[u8] = include_bytes!(env!("NMB_FIXTURE_AIR"));
-
-/// The reviewed runtime identity used by the primer's completion records.
-/// The builder validates it against the Rust sources. Shader artifact keys
-/// independently include the translator's SOURCE_DIGEST and format versions.
-#[unsafe(no_mangle)]
-pub extern "C" fn nmb_runtime_build() -> *const c_char {
-    concat!(env!("NMB_RUNTIME_ID"), "\0").as_ptr().cast()
-}
 
 unsafe extern "C" {
     /// libkern (libSystem): clean and invalidate the data cache over a range, from user space.
@@ -92,7 +88,6 @@ fn finish(command_buffer: &CommandBuffer) -> Result<(), String> {
 fn open(loader: &CStr, cache: &CStr) -> Result<Device, String> {
     let mut options = DeviceOptions::default();
     options.loader = Some(PathBuf::from(loader.to_string_lossy().into_owned()));
-    // No macOS release names this host; answer as the newest measured Metal.
     options.shader_cache = metal2vulkan_runtime::ShaderCacheOptions::in_directory(cache.to_string_lossy().into_owned());
     Device::system_default_with(&options).map_err(|e| format!("device: {e:?}"))
 }
@@ -121,13 +116,6 @@ fn compute(device: &Device, library: &metal2vulkan_runtime::Library) -> Result<u
     // SAFETY: the buffer holds COUNT floats and no command buffer writes it now.
     let values = unsafe { std::slice::from_raw_parts(contents.as_ptr() as *const f32, COUNT) };
     Ok(values.iter().enumerate().filter(|(i, v)| **v != 3.0 * *i as f32).count() as u32)
-}
-
-/// Native ASTC block-row qualification: real GPU image copies and a later CPU
-/// update, not a sampling/shader/visual-correctness claim. Runs once in backboardd.
-#[unsafe(no_mangle)]
-pub extern "C" fn nmb_device_native_astc_copy_check(device: *mut objects::NmbDevice) -> bool {
-    objects::native_astc_copy_check(device)
 }
 
 /// Draws the fixture's top-left-quarter quad into `target` (cleared blue) and returns the encoded command buffer's result.

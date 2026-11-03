@@ -75,8 +75,7 @@ fn buffers_overlap(a: &Buffer, b: &Buffer) -> bool {
     };
     let a_start = a_start.as_ptr() as usize;
     let b_start = b_start.as_ptr() as usize;
-    let (Some(a_end), Some(b_end)) = (a_start.checked_add(a_len), b_start.checked_add(b_len))
-    else {
+    let (Some(a_end), Some(b_end)) = (a_start.checked_add(a_len), b_start.checked_add(b_len)) else {
         return true;
     };
     a_start < b_end && b_start < a_end
@@ -87,13 +86,8 @@ impl UsedResources {
         if buffer.heap().is_some_and(|heap| self.heaps.contains(heap)) {
             return true;
         }
-        self.buffers
-            .iter()
-            .any(|other| buffers_overlap(buffer, other))
-            || self.heaps.iter().any(|heap| {
-                heap.bytes()
-                    .is_some_and(|bytes| buffers_overlap(buffer, bytes))
-            })
+        self.buffers.iter().any(|other| buffers_overlap(buffer, other))
+            || self.heaps.iter().any(|heap| heap.bytes().is_some_and(|bytes| buffers_overlap(buffer, bytes)))
     }
 
     /// Whether this list names a resource's storage, including a view's root, a buffer
@@ -117,9 +111,7 @@ impl UsedResources {
     /// members. Imports over its host range are dependencies too.
     pub fn references_heap(&self, heap: &Heap) -> bool {
         self.heaps.contains(heap)
-            || heap
-                .bytes()
-                .is_some_and(|bytes| self.references_buffer(bytes))
+            || heap.bytes().is_some_and(|bytes| self.references_buffer(bytes))
     }
 }
 

@@ -13,17 +13,15 @@ id native_bridge_metal_open(const char *loader, const char *cache, uint64_t regi
 id native_bridge_metal_library_with_air(const void *bytes, size_t length);
 // One line for the plugin's status report: command buffers committed/failed locally, pipelines made, refusals, the last refusal's text.
 size_t native_bridge_metal_status(char *out, size_t size);
-uint64_t native_bridge_metal_first_problem(char *out,size_t size);
-extern void (*native_bridge_metal_problem_hook)(const char *);
 // The pixel formats of the textures asked for (first eight distinct) and how many texture requests the runtime refused.
 size_t native_bridge_metal_formats(char *out, size_t size);
+// The process's first problem (a refusal or a missing call) into out, and how many problems there were.
+uint64_t native_bridge_metal_first_problem(char *out, size_t size);
+// A note from the plugin for the telemetry's problem lines.
+void native_bridge_metal_note(const char *what);
+// Called once, on the thread that hit it, with the first problem's text (null: not called).
+extern void (*native_bridge_metal_problem_hook)(const char *);
 size_t native_bridge_metal_telemetry(char *out, size_t size);
-// CPU bookkeeping only, for yielding background shader priming to rendering.
-unsigned native_bridge_metal_recent_commits(uint64_t window_us);
-unsigned native_bridge_metal_pending_commits(void);
-// Atomic scalar observations from the optional background primer.
-extern uint32_t native_prime_compiling, native_prime_libraries_done, native_prime_libraries_total, native_prime_made, native_prime_rate,
-                native_prime_functions_resumed;
 // Structured cumulative artifact/driver-cache counters for offline qualification.
 struct NmbShaderCacheStats;
 bool native_bridge_metal_shader_cache_stats(struct NmbShaderCacheStats *out);
@@ -32,5 +30,7 @@ bool native_bridge_metal_work_stats(uint64_t out[10]);
 // page faults, memset bandwidth, CommonCrypto SHA-256, then the first `pairs` vertex/fragment pairs of the given QuartzCore metallib made into
 // BGRA8 render states and drawn once each (pipeline_timing_host's draw=1 order). The results become the telemetry's Y rows; also returned.
 size_t native_bridge_metal_benchmark(id device, const char *metallib, unsigned pairs, char *out, size_t size);
+// Lets go of every held IOSurface import whose surface only the import still retains (also done at each command buffer's completion).
+void native_bridge_metal_trim_surface_imports(void);
 }
 #endif

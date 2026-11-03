@@ -10,7 +10,7 @@ FRONTEND = ROOT / 'graphics/metal/AdrenoMetal'
 text = (FRONTEND / 'NativeBridgeMetalFrontend.mm').read_text()
 methods = [match[0] for match in re.finditer(r'^- \(void\)new(?:Function|RenderPipelineState|ComputePipelineState)[\s\S]+?^}', text, re.M)
            if 'completionHandler:' in match[0]]
-assert len(methods) == 7, 'Every supported async creation overload must be checked'
+assert len(methods) == 8, 'Every supported async creation overload must be checked'
 source = (ROOT / 'checks/metal-async.mm').read_text()
 source = source.replace('/* ACTUAL_METHODS */', '\n'.join(methods))
 source = source.replace('/* ACTUAL_DECLARATIONS */', '\n'.join(m.split('{', 1)[0] + ';' for m in methods))

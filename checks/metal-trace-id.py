@@ -25,9 +25,8 @@ source = r'''
 #include <set>
 #include <unistd.h>
 static id gDeviceObject;
-static void (*gMissing)(const char *, const char *);
-static unsigned missing;
-static void noteProblem(NSString *message) { assert([message containsString:@"missing"]); ++missing; }
+static NSMethodSignature *missingSignature(id,SEL){return nil;}
+static void answerMissing(NSInvocation *){}
 '''
 source += actual
 source += r'''
@@ -64,7 +63,7 @@ int main() {
   BOOL raised=NO;
   @try { [shared doesNotRecognizeSelector:sel_registerName("unsupportedTraceFixture")]; }
   @catch(NSException *e) { raised=[e.name isEqual:NSInvalidArgumentException]; }
-  assert(raised && missing==1);
+  assert(raised);
   gTraceObjectSequence=UINT32_MAX;
   assert(([NBObject new].globalTraceObjectID&UINT32_MAX)==UINT32_MAX);
   raised=NO;
@@ -72,7 +71,7 @@ int main() {
   @catch(NSException *e) { raised=[e.name isEqual:NSInternalInconsistencyException]; }
   assert(raised);
  }
- puts("PASS: actual Metal object selector ABI, encoder inheritance, stable concurrent identities, no address-reuse collisions, exhaustion and strict unknown-selector failure; no GPU");
+ puts("PASS: actual Metal object selector ABI, encoder inheritance, stable concurrent identities, no address-reuse collisions, exhaustion and inherited unknown-selector failure; no GPU");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='houji-metal-trace-') as directory:

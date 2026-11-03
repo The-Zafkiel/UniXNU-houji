@@ -1,3 +1,4 @@
+#include "tu_frame_diagnostic.h"
 /*
  * Native Darwin kernel backend for Turnip: talks to the NativeAdreno IOKit user client (NativeAdrenoABI.h, version 1).
  * Modelled on tu_knl_kgsl.cc (no libdrm) and tu_knl_drm_msm.cc (the client chooses GPU addresses).
@@ -5,20 +6,23 @@
  */
 
 #include <errno.h>
-#include <atomic>
 #include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
 #include <IOKit/IOKitLib.h>
+#include <dispatch/dispatch.h>
 #include <mach/mach.h>
 
 #include "NativeAdrenoABI.h"
 
 #include "util/os_time.h"
+#include "util/u_atomic.h"
+#include "util/rb_tree.h"
 #include "util/timespec.h"
-#include <dispatch/dispatch.h>
 #include "util/u_debug.h"
 #include "util/u_vector.h"
 #include "vk_util.h"
@@ -56,63 +60,88 @@ static struct {
 
 /* Preserve the native handle, CPU view and IOVA until the captured ring fence
  * actually completed. An unrelated later submission never extends this lease.
- * The queue is bounded; pressure may wait, but ordinary destruction does not. */
-enum { DARWIN_RETIRED_BOS = 256 };
+ * The queue grows with what is waiting; destruction never waits. */
 struct darwin_retired_bo {
    uint64_t handle, iova, size;
    void *mapping;
    uint32_t token, fence;
    bool cacheable, read_only;
 };
-/* UniXNU's whole-BO reuse keeps the SMMU mapping and CPU lease, not only the
- * physical pages. Houji bounds it: idle reuse must not grow wired memory without
- * limit. Size classes and access permissions must match. Imports, shareable and
- * replayable BOs never enter this cache. Completed entries remain until pressure
- * or bounded LRU eviction, so an idle interval does not force every map anew. */
-enum { DARWIN_CACHED_BOS = 128 };
-static constexpr uint64_t DARWIN_CACHE_BYTES = 64ull << 20;
-static constexpr uint64_t DARWIN_CACHE_MAX_BO = 8ull << 20;
+
+/* A freed BO whose fence completed stays whole (kernel handle, GPU mapping, CPU lease) in a size-class cache and is handed to the next
+ * allocation of its class: one BoAlloc + BoMap (the SMMU table update, about a millisecond) and one BoFree + unmap saved per reuse.
+ * Classes are the size rounded up to a quarter of its power of two (4 KiB steps up to 16 KiB). Replayable BOs (client addresses) and
+ * host imports never enter it. */
+/* No byte or entry limit: as Metal's own resource cache does, the cache gives everything back when the system reports memory pressure
+ * (DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, warning or critical, the signal Apple's frameworks purge on) and when an allocation or a GPU range
+ * cannot be had (then the allocation is tried again). */
+static volatile uint32_t darwin_memory_pressure;   /* bumped by the memory-pressure source; each device flushes once per change */
 struct darwin_cached_bo {
-   struct darwin_retired_bo bo;
-   uint64_t stamp;
-   bool releasing;
+   uint64_t handle, iova, size, stamp, freed_s;   /* freed_s: monotonic seconds when it entered the cache */
+   void *mapping;
+   uint32_t token;
+   bool read_only;
 };
-static std::atomic<uint64_t> darwin_cache_stats[8];
-/* Rounded requests, larger-cache hits, new allocations, new bytes. Separate
- * ABI so the existing eight-word statistics reader remains valid. */
-static std::atomic<uint64_t> darwin_cache_fit_stats[4];
-static std::atomic<uint32_t> darwin_memory_pressure;
-struct darwin_retire_state {
-   pthread_mutex_t lock;
-   struct darwin_retired_bo entries[DARWIN_RETIRED_BOS];
-   unsigned head, count;
-   VkResult failure;
-   uint64_t enqueued, reaped, pressure_waits;
-   struct darwin_cached_bo cache[DARWIN_CACHED_BOS];
-   unsigned cache_count;
-   uint64_t cache_bytes, cache_stamp;
-   uint32_t pressure_seen;
+struct darwin_bo_cache_stats {
+   uint64_t lookups, hits, inserts, evictions, flushes, bytes_peak;
 };
 
-/* Process totals: lookups, hits, inserts, evictions, flushes, retained bytes,
- * peak retained bytes and entries. Atomics do not dereference a closing device. */
+/* The GPU address space as two red-black trees over the free holes (Mesa's rb_tree, the same algorithm as XNU's libkern/tree.h): by
+ * address, to find a hole's neighbours when a range is freed and merge them, and by (size, address), to find the smallest hole that
+ * fits an allocation. Allocation, free and merge are all O(log n) in the number of holes; the heap it replaces (a list of holes) was
+ * walked from its head on every free and every allocation. */
+struct darwin_va_hole {
+   struct rb_node by_address, by_size;
+   uint64_t start, size;
+};
+struct darwin_va {
+   struct rb_tree address, size;
+   bool seeded;
+   uint64_t holes, allocs, frees, merges;
+   uint64_t used;   /* bytes handed out */
+};
+
+struct darwin_retire_state {
+   pthread_mutex_t lock;
+   struct darwin_retired_bo *entries;   /* a ring of `capacity` records, grown when full */
+   unsigned capacity, head, count;
+   VkResult failure;
+   uint64_t enqueued, reaped, pressure_waits;
+   struct darwin_cached_bo *cache;
+   unsigned cache_count, cache_capacity;
+   uint64_t cache_bytes, cache_stamp, cache_cleaned_s;
+   uint32_t pressure_seen;
+   struct darwin_bo_cache_stats cache_stats;
+   struct darwin_va va;
+};
+static struct darwin_retire_state *darwin_stats_state;   /* for tu_darwin_bo_cache_stats */
+
 extern "C" __attribute__((visibility("default"))) void tu_darwin_bo_cache_stats(uint64_t out[8]);
 extern "C" __attribute__((visibility("default"))) void
 tu_darwin_bo_cache_stats(uint64_t out[8])
 {
-   if (!out) return;
-   for (unsigned i = 0; i < 8; ++i)
-      out[i] = darwin_cache_stats[i].load(std::memory_order_relaxed);
+   struct darwin_retire_state *retire = darwin_stats_state;
+   memset(out, 0, 8 * sizeof(uint64_t));
+   if (!retire)
+      return;
+   pthread_mutex_lock(&retire->lock);
+   out[0] = retire->cache_stats.lookups;
+   out[1] = retire->cache_stats.hits;
+   out[2] = retire->cache_stats.inserts;
+   out[3] = retire->cache_stats.evictions;
+   out[4] = retire->cache_stats.flushes;
+   out[5] = retire->cache_bytes;
+   out[6] = retire->cache_stats.bytes_peak;
+   out[7] = retire->va.holes;
+   pthread_mutex_unlock(&retire->lock);
 }
 
-extern "C" __attribute__((visibility("default"))) void tu_darwin_bo_cache_fit_stats(uint64_t out[4]);
-extern "C" __attribute__((visibility("default"))) void
-tu_darwin_bo_cache_fit_stats(uint64_t out[4])
-{
-   if (!out) return;
-   for (unsigned i = 0; i < 4; ++i)
-      out[i] = darwin_cache_fit_stats[i].load(std::memory_order_relaxed);
-}
+/* The priority the driver was last given for this process (NativeAdrenoMethodSetPriority). */
+// Houji keeps the ABI-v1 selector table. In ABI v2 selector 17 is SetPriority;
+// here it is SubmitBatch. Never send a v2 request to the v1 kernel.
+static_assert(NativeAdrenoAbiVersion == 1, "Houji transport requires ABI v1");
+static_assert(sizeof(NativeAdrenoAbiSubmit) == 416, "legacy submit wire record");
+static_assert(sizeof(NativeAdrenoAbiSubmitBatch) == 3104, "batch submit wire record");
 
 static kern_return_t
 dw_call(uint32_t method, const void *in, size_t in_size, void *out,
@@ -192,7 +221,50 @@ dw_open_connection(struct tu_instance *instance)
    dw.open = true;
    dw.inflight_count = 0;
    dw.last_fence = 0;
+
+   // ABI v1 exposes no per-process priority method. The board's queue policy
+   // remains authoritative; publishing an unsupported priority returns false.
    return VK_SUCCESS;
+}
+
+/* What the process's own Metal queues ask for (the frontend's setGPUPriority: and setBackgroundGPUPriority:), given to the driver as they
+ * come: the runtime sent the board's default at device open, before the process could ask. 0xffffffff keeps that value. False before the
+ * device is open or when the driver refuses it (a foreground priority of 3, the disabled level, is not a queue's foreground).
+ */
+extern "C" __attribute__((visibility("default"))) bool tu_darwin_set_priority(uint32_t foreground, uint32_t background);
+extern "C" __attribute__((visibility("default"))) bool
+tu_darwin_set_priority(uint32_t foreground, uint32_t background)
+{
+   (void)foreground; (void)background;
+   return false;
+}
+
+/* A note for the kernel's log (NativeAdrenoMethodNote), from the host frontend: kind 1 a render pass, 2 a pipeline made or refused. The
+ * kernel adds the caller's pid. False before the device is open or when the driver refuses it.
+ */
+extern "C" __attribute__((visibility("default"))) bool tu_darwin_note(uint32_t kind, const uint32_t *words, uint32_t count);
+extern "C" __attribute__((visibility("default"))) bool
+tu_darwin_note(uint32_t kind, const uint32_t *words, uint32_t count)
+{
+   (void)kind; (void)words; (void)count;
+   return false; // ABI v1 has no Note method.
+}
+
+extern "C" __attribute__((visibility("default"))) const char *tu_darwin_frame_build_id(void);
+extern "C" __attribute__((visibility("default"))) const char *tu_darwin_frame_build_id(void) {
+#ifdef TU_BUILD_ID_OVERRIDE
+   return TU_BUILD_ID_OVERRIDE;
+#else
+   return "unknown";
+#endif
+}
+
+extern "C" __attribute__((visibility("default"))) bool
+tu_darwin_frame_diagnostic(uint32_t method,const void *data,uint32_t bytes)
+{
+   if(!dw.open || !data || (method!=0x7102 && method!=0x7103) ||
+      (method==0x7102 && bytes!=120) || (method==0x7103 && bytes!=1144))return false;
+   return dw_call(method,data,bytes,NULL,0)==KERN_SUCCESS;
 }
 
 static void
@@ -221,9 +293,11 @@ dw_wait_fence_raw(struct tu_device *dev, uint32_t fence, uint64_t abs_timeout_ns
 {
    for (;;) {
       uint64_t now = os_time_get_nano();
-      uint64_t slice = 1000000; /* 1 ms */
-      if (abs_timeout_ns != UINT64_MAX && abs_timeout_ns <= now)
-         slice = 0;
+      /* The rest of the wait, at most 100 ms a call: the kernel sleeps between fence interrupts until the fence or the
+       * timeout. One 1 ms slice a call made a frame's wait several IOKit calls (i553: 258682 waits in 166 s, 97 % timed out). */
+      uint64_t slice = 100000000; /* 100 ms */
+      if (abs_timeout_ns != UINT64_MAX)
+         slice = abs_timeout_ns > now ? MIN2(abs_timeout_ns - now, slice) : 0;
       NativeAdrenoAbiWaitFence req = {.fence = fence, .timeout_ns = slice};
       kern_return_t kr = dw_call(NativeAdrenoMethodWaitFence, &req, sizeof(req), NULL, 0);
       if (kr == KERN_SUCCESS)
@@ -258,7 +332,8 @@ darwin_queue_wait_fence(struct tu_queue *queue, uint32_t fence, uint64_t timeout
 static int
 darwin_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
 {
-   /* The kernel client has queue 0 from open(); every submission rides the one shared ring. */
+   /* All Vulkan queues in this client use kernel queue 0. The kernel preserves its FIFO
+    * across ring/priority changes, so already-submitted sync dependencies remain ordered. */
    queue->msm_queue_id = 0;
    return 0;
 }
@@ -270,185 +345,359 @@ darwin_submitqueue_close(struct tu_device *dev, struct tu_queue *queue)
 
 /* ---- GPU address space: the client picks addresses out of [va_start, va_start + va_size). ---- */
 
+static int
+darwin_va_cmp_address(const struct rb_node *a, const struct rb_node *b)
+{
+   const struct darwin_va_hole *x = rb_node_data(struct darwin_va_hole, a, by_address);
+   const struct darwin_va_hole *y = rb_node_data(struct darwin_va_hole, b, by_address);
+   return x->start > y->start ? -1 : x->start < y->start ? 1 : 0;
+}
+
+static int
+darwin_va_cmp_size(const struct rb_node *a, const struct rb_node *b)
+{
+   const struct darwin_va_hole *x = rb_node_data(struct darwin_va_hole, a, by_size);
+   const struct darwin_va_hole *y = rb_node_data(struct darwin_va_hole, b, by_size);
+   if (x->size != y->size)
+      return x->size > y->size ? -1 : 1;
+   return x->start > y->start ? -1 : x->start < y->start ? 1 : 0;
+}
+
+/* rb_tree_insert puts a node on the left when cmp(existing, new) < 0, so the comparators above answer the opposite of the natural order:
+ * the left subtree holds the smaller keys, first/next walk upwards, and both lookups below descend by hand. */
+static struct darwin_va_hole *
+darwin_va_smallest_fit(struct darwin_va *va, uint64_t size)
+{
+   struct rb_node *best = NULL;
+   for (struct rb_node *x = va->size.root; x;) {
+      if (rb_node_data(struct darwin_va_hole, x, by_size)->size >= size) {
+         best = x;
+         x = x->left;
+      } else {
+         x = x->right;
+      }
+   }
+   return best ? rb_node_data(struct darwin_va_hole, best, by_size) : NULL;
+}
+
+/* The hole with the largest start at or below the address. */
+static struct darwin_va_hole *
+darwin_va_hole_at_or_below(struct darwin_va *va, uint64_t address)
+{
+   struct rb_node *best = NULL;
+   for (struct rb_node *x = va->address.root; x;) {
+      if (rb_node_data(struct darwin_va_hole, x, by_address)->start <= address) {
+         best = x;
+         x = x->right;
+      } else {
+         x = x->left;
+      }
+   }
+   return best ? rb_node_data(struct darwin_va_hole, best, by_address) : NULL;
+}
+
+static bool
+darwin_va_add(struct darwin_va *va, uint64_t start, uint64_t size)
+{
+   if (!size)
+      return true;
+   struct darwin_va_hole *hole = (struct darwin_va_hole *)calloc(1, sizeof(*hole));
+   if (!hole)
+      return false;   /* the range is lost, not reused: never handed out twice */
+   hole->start = start;
+   hole->size = size;
+   rb_tree_insert(&va->address, &hole->by_address, darwin_va_cmp_address);
+   rb_tree_insert(&va->size, &hole->by_size, darwin_va_cmp_size);
+   ++va->holes;
+   return true;
+}
+
+static void
+darwin_va_del(struct darwin_va *va, struct darwin_va_hole *hole)
+{
+   rb_tree_remove(&va->address, &hole->by_address);
+   rb_tree_remove(&va->size, &hole->by_size);
+   --va->holes;
+   free(hole);
+}
+
+/* Takes [at, at + size) out of a hole that contains it; what is left on either side stays free. */
+static void
+darwin_va_carve(struct darwin_va *va, struct darwin_va_hole *hole, uint64_t at, uint64_t size)
+{
+   const uint64_t begin = hole->start, end = hole->start + hole->size;
+   darwin_va_del(va, hole);
+   darwin_va_add(va, begin, at - begin);
+   darwin_va_add(va, at + size, end - (at + size));
+   ++va->allocs;
+   va->used += size;
+}
+
+/* From the smallest hole that fits (best fit); a high allocation takes the end of it. 0 when nothing fits. */
+static uint64_t
+darwin_va_alloc(struct darwin_va *va, uint64_t size, uint64_t alignment, bool high)
+{
+   if (!size || !alignment || (alignment & (alignment - 1)))
+      return 0;
+   struct darwin_va_hole *hole = darwin_va_smallest_fit(va, size);
+   while (hole) {
+      const uint64_t end = hole->start + hole->size;
+      uint64_t at;
+      bool fits;
+      if (high) {
+         at = (end - size) & ~(alignment - 1);
+         fits = at >= hole->start;
+      } else {
+         at = (hole->start + alignment - 1) & ~(alignment - 1);
+         fits = at >= hole->start && at <= end && end - at >= size;
+      }
+      if (fits) {
+         darwin_va_carve(va, hole, at, size);
+         return at;
+      }
+      struct rb_node *next = rb_node_next(&hole->by_size);
+      hole = next ? rb_node_data(struct darwin_va_hole, next, by_size) : NULL;
+   }
+   return 0;
+}
+
+/* The range at a client-chosen address, when it is all free. */
+static bool
+darwin_va_alloc_at(struct darwin_va *va, uint64_t address, uint64_t size)
+{
+   struct darwin_va_hole *hole = darwin_va_hole_at_or_below(va, address);
+   if (!size || !hole || address - hole->start >= hole->size || hole->start + hole->size - address < size)
+      return false;
+   darwin_va_carve(va, hole, address, size);
+   return true;
+}
+
+/* Returns a range and merges it with the free holes that touch it. A range that overlaps a free hole is a double free: refused. */
+static void
+darwin_va_free(struct darwin_va *va, uint64_t address, uint64_t size)
+{
+   if (!size)
+      return;
+   struct darwin_va_hole *below = darwin_va_hole_at_or_below(va, address);
+   struct rb_node *after = below ? rb_node_next(&below->by_address) : rb_tree_first(&va->address);
+   struct darwin_va_hole *above = after ? rb_node_data(struct darwin_va_hole, after, by_address) : NULL;
+   if ((below && below->start + below->size > address) || (above && above->start < address + size)) {
+      mesa_loge("darwin: GPU range %#llx+%#llx freed over a free hole", (unsigned long long)address,
+                (unsigned long long)size);
+      return;
+   }
+   uint64_t begin = address, end = address + size;
+   if (below && below->start + below->size == address) {
+      begin = below->start;
+      darwin_va_del(va, below);
+      ++va->merges;
+   }
+   if (above && above->start == end) {
+      end = above->start + above->size;
+      darwin_va_del(va, above);
+      ++va->merges;
+   }
+   darwin_va_add(va, begin, end - begin);
+   ++va->frees;
+   va->used -= size;
+}
+
 static VkResult
 darwin_allocate_iova(struct tu_device *dev, uint64_t size, uint64_t client_iova,
                      enum tu_bo_alloc_flags flags, uint64_t *iova)
 {
+   struct darwin_va *va = &((struct darwin_retire_state *)dev->darwin_retire)->va;
    *iova = 0;
    mtx_lock(&dev->vma_mutex);
+   if (!va->seeded) {
+      /* Nothing else allocates from the heap the device made: the whole range is free. */
+      va->seeded = true;
+      darwin_va_add(va, dev->physical_device->va_start, dev->physical_device->va_size);
+   }
    if (flags & TU_BO_ALLOC_REPLAYABLE) {
       if (client_iova) {
-         if (util_vma_heap_alloc_addr(&dev->vma, client_iova, size))
+         if (darwin_va_alloc_at(va, client_iova, size))
             *iova = client_iova;
          else {
             mtx_unlock(&dev->vma_mutex);
             return VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS;
          }
       } else {
-         dev->vma.alloc_high = true;
-         *iova = util_vma_heap_alloc(&dev->vma, size, os_page_size);
+         *iova = darwin_va_alloc(va, size, os_page_size, true);
       }
    } else {
-      dev->vma.alloc_high = false;
-      *iova = util_vma_heap_alloc(&dev->vma, size, os_page_size);
+      *iova = darwin_va_alloc(va, size, os_page_size, false);
    }
-   const uint64_t free_bytes = *iova ? 0 : dev->vma.free_size;
-   const uint64_t largest = *iova ? 0 : util_vma_heap_get_max_free_continuous_size(&dev->vma);
    mtx_unlock(&dev->vma_mutex);
-   if (!*iova)
-      return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                       "Darwin IOVA OOM: request=%llu KiB free=%llu KiB largest=%llu KiB",
-                       (unsigned long long)(size >> 10),
-                       (unsigned long long)(free_bytes >> 10),
-                       (unsigned long long)(largest >> 10));
-   return VK_SUCCESS;
+   return *iova ? VK_SUCCESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
 static void
 darwin_free_iova(struct tu_device *dev, uint64_t iova, uint64_t size)
 {
+   struct darwin_va *va = &((struct darwin_retire_state *)dev->darwin_retire)->va;
    mtx_lock(&dev->vma_mutex);
-   util_vma_heap_free(&dev->vma, iova, size);
+   darwin_va_free(va, iova, size);
    mtx_unlock(&dev->vma_mutex);
 }
 
-/* A partially released or busy entry retains its IOVA and native handle. The
- * caller must never hand it to an allocator again after release was attempted. */
+/* Hands the CPU lease, the kernel allocation and the GPU range of a BO back. VK_NOT_READY: the kernel still holds it (retry later);
+ * anything else is final (an unexpected kernel status loses the device). Called under retire->lock. */
 static VkResult
-darwin_release_native(struct tu_device *dev, struct darwin_retire_state *retire,
-                      struct darwin_retired_bo *bo)
+darwin_release_native(struct tu_device *dev, struct darwin_retire_state *retire, uint64_t handle, uint64_t iova,
+                      uint64_t size, void **mapping, uint32_t *token)
 {
-   if (bo->token) {
-      if (bo->mapping) {
-         kern_return_t kr = IOConnectUnmapMemory64(dw.conn, bo->token, mach_task_self(),
-                                                  (mach_vm_address_t)(uintptr_t)bo->mapping);
+   if (*token) {
+      if (*mapping) {
+         kern_return_t kr = IOConnectUnmapMemory64(dw.conn, *token, mach_task_self(), (mach_vm_address_t)(uintptr_t)*mapping);
          if (kr != KERN_SUCCESS)
             return retire->failure = vk_device_set_lost(&dev->vk, "deferred CPU unmap failed: 0x%x", kr);
-         bo->mapping = NULL;
+         *mapping = NULL;
       }
-      NativeAdrenoAbiBoCpuUnmap undo = {.handle = bo->handle, .token = bo->token};
+      NativeAdrenoAbiBoCpuUnmap undo = {.handle = handle, .token = *token};
       kern_return_t kr = dw_call(NativeAdrenoMethodBoCpuUnmap, &undo, sizeof(undo), NULL, 0);
       if (kr != KERN_SUCCESS)
          return retire->failure = vk_device_set_lost(&dev->vk, "deferred CPU lease release failed: 0x%x", kr);
-      bo->token = 0;
+      *token = 0;
    }
-   NativeAdrenoAbiBoFree release = {.handle = bo->handle};
+   NativeAdrenoAbiBoFree release = {.handle = handle};
    kern_return_t kr = dw_call(NativeAdrenoMethodBoFree, &release, sizeof(release), NULL, 0);
    if (kr == kIOReturnBusy)
       return VK_NOT_READY;
    if (kr != KERN_SUCCESS)
       return retire->failure = vk_device_set_lost(&dev->vk, "deferred BoFree failed: 0x%x", kr);
-   darwin_free_iova(dev, bo->iova, bo->size);
+   darwin_free_iova(dev, iova, size);
    return VK_SUCCESS;
 }
 
-static void
-darwin_cache_remove(struct darwin_retire_state *retire, unsigned at)
-{
-   const uint64_t bytes = retire->cache[at].bo.size;
-   retire->cache_bytes -= bytes;
-   retire->cache[at] = retire->cache[--retire->cache_count];
-   retire->cache[retire->cache_count] = {};
-   darwin_cache_stats[5].fetch_sub(bytes, std::memory_order_relaxed);
-   darwin_cache_stats[7].fetch_sub(1, std::memory_order_relaxed);
-}
-
-static VkResult
-darwin_cache_evict(struct tu_device *dev, struct darwin_retire_state *retire, unsigned at)
-{
-   struct darwin_cached_bo *entry = &retire->cache[at];
-   entry->releasing = true;
-   VkResult result = darwin_release_native(dev, retire, &entry->bo);
-   if (result == VK_SUCCESS) {
-      darwin_cache_remove(retire, at);
-      darwin_cache_stats[3].fetch_add(1, std::memory_order_relaxed);
-   }
-   return result;
-}
-
-static bool
-darwin_cache_flush(struct tu_device *dev, struct darwin_retire_state *retire)
-{
-   const unsigned before = retire->cache_count;
-   if (before) darwin_cache_stats[4].fetch_add(1, std::memory_order_relaxed);
-   for (unsigned i = before; i-- > 0 && retire->failure == VK_SUCCESS;)
-      darwin_cache_evict(dev, retire, i);
-   return retire->cache_count < before;
-}
-
-/* Called only after the recorded fence completed, under retire->lock. */
-static bool
-darwin_cache_put(struct tu_device *dev, struct darwin_retire_state *retire,
-                 const struct darwin_retired_bo *bo)
-{
-   if (!bo->cacheable || !bo->size || bo->size > DARWIN_CACHE_MAX_BO)
-      return false;
-   while (retire->cache_count == DARWIN_CACHED_BOS ||
-          retire->cache_bytes > DARWIN_CACHE_BYTES - bo->size) {
-      unsigned oldest = 0;
-      for (unsigned i = 1; i < retire->cache_count; ++i)
-         if (retire->cache[i].stamp < retire->cache[oldest].stamp) oldest = i;
-      if (darwin_cache_evict(dev, retire, oldest) != VK_SUCCESS)
-         return false;
-   }
-   retire->cache[retire->cache_count++] = {*bo, ++retire->cache_stamp, false};
-   retire->cache_bytes += bo->size;
-   darwin_cache_stats[2].fetch_add(1, std::memory_order_relaxed);
-   const uint64_t total = darwin_cache_stats[5].fetch_add(bo->size, std::memory_order_relaxed) + bo->size;
-   uint64_t peak = darwin_cache_stats[6].load(std::memory_order_relaxed);
-   while (peak < total && !darwin_cache_stats[6].compare_exchange_weak(peak, total, std::memory_order_relaxed)) {}
-   darwin_cache_stats[7].fetch_add(1, std::memory_order_relaxed);
-   return true;
-}
-
-static bool
-darwin_cache_get(struct darwin_retire_state *retire, uint64_t size, bool read_only,
-                 bool need_mapping, struct darwin_retired_bo *out)
-{
-   darwin_cache_stats[0].fetch_add(1, std::memory_order_relaxed);
-   int best = -1;
-   for (unsigned i = 0; i < retire->cache_count; ++i) {
-      const struct darwin_cached_bo *entry = &retire->cache[i];
-      /* Upstream best fit: at most a quarter larger, smallest first, newest
-       * among equal sizes. Subtraction avoids an overflowing upper bound. */
-      if (!entry->releasing && size && entry->bo.size >= size && entry->bo.size - size <= size / 4 &&
-          entry->bo.read_only == read_only &&
-          (!need_mapping || (entry->bo.mapping && entry->bo.token)) &&
-          (best < 0 || entry->bo.size < retire->cache[best].bo.size ||
-           (entry->bo.size == retire->cache[best].bo.size && entry->stamp > retire->cache[best].stamp))) best = i;
-   }
-   if (best < 0) return false;
-   *out = retire->cache[best].bo;
-   darwin_cache_remove(retire, best);
-   darwin_cache_stats[1].fetch_add(1, std::memory_order_relaxed);
-   if (out->size > size) darwin_cache_fit_stats[1].fetch_add(1, std::memory_order_relaxed);
-   return true;
-}
-
-/* UniXNU size classes: 4 KiB through 16 KiB, then quarter-power-of-two
- * steps. Only bounded owned BOs use this rounding; imports keep their extent. */
+/* The size class of an allocation: a multiple of 4 KiB, then of a quarter of the power of two below it (at most 12.5 % over). */
 static uint64_t
 darwin_size_class(uint64_t size)
 {
-   if (!size || size > DARWIN_CACHE_MAX_BO) return size;
-   size = (size + 4095) & ~uint64_t(4095);
-   if (size <= 16384) return size;
-   const uint64_t step = (uint64_t(1) << (63 - __builtin_clzll(size - 1))) / 4;
+   size = (size + 4095) & ~(uint64_t)4095;
+   if (size <= 16384)
+      return size;
+   const uint64_t step = ((uint64_t)1 << (63 - __builtin_clzll(size - 1))) / 4;
    return (size + step - 1) / step * step;
 }
 
+static void
+darwin_cache_log(struct darwin_retire_state *retire)
+{
+   const struct darwin_bo_cache_stats *st = &retire->cache_stats;
+   fprintf(stderr, "NativeAdreno BO cache: %llu allocations, %llu reused (%llu.%llu%%), %llu cached now (%llu MiB), %llu evicted, %llu flushed, %llu free GPU ranges\n",
+           (unsigned long long)st->lookups, (unsigned long long)st->hits, (unsigned long long)(st->hits * 100 / st->lookups),
+           (unsigned long long)(st->hits * 1000 / st->lookups % 10), (unsigned long long)retire->cache_count,
+           (unsigned long long)(retire->cache_bytes >> 20), (unsigned long long)st->evictions, (unsigned long long)st->flushes,
+           (unsigned long long)retire->va.holes);
+}
+
+/* Drops the cache entry at the index for real. VK_NOT_READY keeps it. */
+static VkResult
+darwin_cache_evict(struct tu_device *dev, struct darwin_retire_state *retire, unsigned at)
+{
+   struct darwin_cached_bo *e = &retire->cache[at];
+   VkResult result = darwin_release_native(dev, retire, e->handle, e->iova, e->size, &e->mapping, &e->token);
+   if (result != VK_SUCCESS)
+      return result;
+   retire->cache_bytes -= e->size;
+   *e = retire->cache[--retire->cache_count];
+   ++retire->cache_stats.evictions;
+   return VK_SUCCESS;
+}
+
+/* Called under retire->lock with a BO whose fence completed. True: the cache took it whole. */
+static bool
+darwin_cache_put(struct tu_device *dev, struct darwin_retire_state *retire, const struct darwin_retired_bo *bo)
+{
+   if (retire->cache_count == retire->cache_capacity) {
+      const unsigned capacity = retire->cache_capacity ? retire->cache_capacity * 2 : 64;
+      struct darwin_cached_bo *cache = (struct darwin_cached_bo *)realloc(retire->cache, capacity * sizeof(*cache));
+      if (!cache)
+         return false;   /* the BO is released instead */
+      retire->cache = cache;
+      retire->cache_capacity = capacity;
+   }
+   retire->cache[retire->cache_count++] = {bo->handle, bo->iova, bo->size, ++retire->cache_stamp,
+                                           (uint64_t)(os_time_get_nano() / 1000000000), bo->mapping, bo->token, bo->read_only};
+   retire->cache_bytes += bo->size;
+   if (retire->cache_bytes > retire->cache_stats.bytes_peak)
+      retire->cache_stats.bytes_peak = retire->cache_bytes;
+   ++retire->cache_stats.inserts;
+   return true;
+}
+
+/* The most recently cached BO of a class (its pages are the warmest). A BO the caller needs zeroed must have a CPU view to zero it by. */
+static bool
+darwin_cache_get(struct darwin_retire_state *retire, uint64_t size, bool read_only, bool need_mapping, struct darwin_cached_bo *out)
+{
+   ++retire->cache_stats.lookups;
+   int best = -1;
+   for (unsigned i = 0; i < retire->cache_count; ++i) {
+      const struct darwin_cached_bo *e = &retire->cache[i];
+      /* The class asked for, or a BO up to a quarter larger (the smallest such, then the most recent). */
+      if (e->size >= size && e->size - size <= size / 4 && e->read_only == read_only && (!need_mapping || e->mapping) &&
+          (best < 0 || e->size < retire->cache[best].size ||
+           (e->size == retire->cache[best].size && e->stamp > retire->cache[best].stamp)))
+         best = (int)i;
+   }
+   if (best >= 0) {
+      *out = retire->cache[best];
+      retire->cache_bytes -= out->size;
+      retire->cache[best] = retire->cache[--retire->cache_count];
+      ++retire->cache_stats.hits;
+   }
+   if (!(retire->cache_stats.lookups & 4095))
+      darwin_cache_log(retire);
+   return best >= 0;
+}
+
+/* Memory ran out (kernel pool or GPU range): everything cached goes back. */
+static bool
+darwin_cache_flush(struct tu_device *dev, struct darwin_retire_state *retire)
+{
+   bool any = retire->cache_count != 0;
+   for (unsigned i = retire->cache_count; i-- > 0;)
+      darwin_cache_evict(dev, retire, i);
+   if (any)
+      ++retire->cache_stats.flushes;
+   return any;
+}
+
+/* Called under retire->lock: once per memory-pressure notification the whole cache goes back, and otherwise every BO not reused
+ * within a second of entering it, as freedreno's own BO cache keeps a freed BO (freedreno_bo_cache.c, fd_bo_cache_cleanup: "keep things
+ * in cache for at least 1 second", at most once a second). Without the second rule the cache held every BO the render server ever freed
+ * once the kernel stopped refusing allocations (untagged-7c2c611f: backboardd held 3099 MiB, the system's memory ran out). */
+static void
+darwin_cache_trim(struct tu_device *dev, struct darwin_retire_state *retire)
+{
+   const uint32_t pressure = p_atomic_read(&darwin_memory_pressure);
+   if (pressure != retire->pressure_seen) {
+      retire->pressure_seen = pressure;
+      darwin_cache_flush(dev, retire);
+      return;
+   }
+   const uint64_t now = (uint64_t)(os_time_get_nano() / 1000000000);
+   if (now == retire->cache_cleaned_s)
+      return;
+   retire->cache_cleaned_s = now;
+   for (unsigned i = retire->cache_count; i-- > 0;)
+      if (now - retire->cache[i].freed_s > 1)
+         darwin_cache_evict(dev, retire, i);
+}
+
+/* The process's memory-pressure source, made once: libdispatch delivers the kernel's memorystatus levels to it. */
 static void
 darwin_watch_memory_pressure(void)
 {
    static pthread_once_t once = PTHREAD_ONCE_INIT;
    pthread_once(&once, [] {
       dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
-         DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
-         dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-      if (!source) return;
-      dispatch_source_set_event_handler_f(source, [](void *) {
-         darwin_memory_pressure.fetch_add(1, std::memory_order_relaxed);
-      });
+                                                        DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
+                                                        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+      if (!source)
+         return;
+      dispatch_source_set_event_handler_f(source, [](void *) { p_atomic_inc(&darwin_memory_pressure); });
       dispatch_activate(source);
    });
 }
@@ -462,32 +711,49 @@ darwin_reap_locked(struct tu_device *dev, struct darwin_retire_state *retire)
       return retire->failure;
    /* Cache only within this sweep. Persisting a bare 32-bit fence across sweeps
     * could mistake a later wrapped value for an old observed completion. */
-   uint32_t completed_fence = 0;
-   bool have_completed_fence = false;
-   while (retire->count) {
-      struct darwin_retired_bo *bo = &retire->entries[retire->head];
-      if (bo->fence && (!have_completed_fence || bo->fence != completed_fence)) {
-         VkResult result = dw_wait_fence_raw(dev, bo->fence, 0);
-         if (result == VK_TIMEOUT)
-            return VK_SUCCESS;
-         if (result != VK_SUCCESS)
-            return retire->failure = result;
-         have_completed_fence = true;
-         completed_fence = bo->fence;
+   uint32_t completed_fence = 0, pending_fence = 0;
+   bool have_completed_fence = false, have_pending_fence = false;
+   /* Every entry is looked at, not only the oldest: one BO behind a fence still in flight must not hold back the completed ones queued
+    * after it (they would miss the cache). Entries that are not done yet keep their order at the front of the ring. */
+   const unsigned total = retire->count;
+   unsigned kept = 0;
+   for (unsigned i = 0; i < total; ++i) {
+      struct darwin_retired_bo *bo = &retire->entries[(retire->head + i) % retire->capacity];
+      bool ready = true;
+      if (bo->fence) {
+         if (have_pending_fence && bo->fence == pending_fence) {
+            ready = false;
+         } else if (!have_completed_fence || bo->fence != completed_fence) {
+            VkResult result = dw_wait_fence_raw(dev, bo->fence, 0);
+            if (result == VK_TIMEOUT) {
+               ready = false;
+               have_pending_fence = true;
+               pending_fence = bo->fence;
+            } else if (result != VK_SUCCESS) {
+               return retire->failure = result;
+            } else {
+               have_completed_fence = true;
+               completed_fence = bo->fence;
+            }
+         }
       }
-      if (!darwin_cache_put(dev, retire, bo)) {
-         if (retire->failure != VK_SUCCESS) return retire->failure;
-         /* Once release started, a busy entry may no longer re-enter the cache. */
-         bo->cacheable = false;
-         VkResult result = darwin_release_native(dev, retire, bo);
-         if (result == VK_NOT_READY) return VK_SUCCESS;
-         if (result != VK_SUCCESS) return result;
+      if (ready && !(bo->cacheable && darwin_cache_put(dev, retire, bo))) {
+         VkResult released = darwin_release_native(dev, retire, bo->handle, bo->iova, bo->size, &bo->mapping, &bo->token);
+         if (released == VK_NOT_READY)
+            ready = false;   /* the kernel still holds it: try again at the next sweep */
+         else if (released != VK_SUCCESS)
+            return released;
       }
-      *bo = {};
-      retire->head = (retire->head + 1) % DARWIN_RETIRED_BOS;
-      --retire->count;
-      ++retire->reaped;
+      if (ready) {
+         ++retire->reaped;
+      } else {
+         retire->entries[(retire->head + kept) % retire->capacity] = *bo;
+         ++kept;
+      }
    }
+   for (unsigned i = kept; i < total; ++i)
+      retire->entries[(retire->head + i) % retire->capacity] = {};
+   retire->count = kept;
    return VK_SUCCESS;
 }
 
@@ -497,24 +763,21 @@ darwin_collect_retired(struct tu_device *dev)
    struct darwin_retire_state *retire = (struct darwin_retire_state *)dev->darwin_retire;
    pthread_mutex_lock(&retire->lock);
    VkResult result = darwin_reap_locked(dev, retire);
-   const uint32_t pressure = darwin_memory_pressure.load(std::memory_order_relaxed);
-   if (result == VK_SUCCESS && pressure != retire->pressure_seen) {
-      retire->pressure_seen = pressure;
-      darwin_cache_flush(dev, retire);
-      result = retire->failure;
-   }
+   if (result == VK_SUCCESS)
+      darwin_cache_trim(dev, retire);
    pthread_mutex_unlock(&retire->lock);
    return result;
 }
 
 static VkResult
 darwin_map_failure(struct tu_device *dev, uint64_t handle, uint64_t iova,
-                   uint64_t size, kern_return_t map_error)
+                   uint64_t size, kern_return_t map_error, bool own_iova = true)
 {
    NativeAdrenoAbiBoFree release = {.handle = handle};
    kern_return_t cleanup = dw_call(NativeAdrenoMethodBoFree, &release, sizeof(release), NULL, 0);
    if (cleanup == KERN_SUCCESS) {
-      darwin_free_iova(dev, iova, size);
+      if (own_iova)   /* a lazy BO's range is its sparse VMA's, which frees it */
+         darwin_free_iova(dev, iova, size);
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY, "BoMap failed: 0x%x", map_error);
    }
    /* A failed map may have modified tables. Unknown cleanup never authorizes
@@ -537,75 +800,90 @@ darwin_bo_init(struct tu_device *dev, struct vk_object_base *base,
                const char *name)
 {
    MESA_TRACE_FUNC();
-   if (lazy_vma)
-      return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
-
    VkResult collected = darwin_collect_retired(dev);
    if (collected != VK_SUCCESS)
       return collected;
 
    struct darwin_retire_state *retire = (struct darwin_retire_state *)dev->darwin_retire;
-   static const bool enabled = debug_get_bool_option("TU_DARWIN_BO_CACHE", true);
-   const unsigned reusable_flags = TU_BO_ALLOC_ALLOW_DUMP | TU_BO_ALLOC_GPU_READ_ONLY | TU_BO_ALLOC_INTERNAL_RESOURCE;
-   const bool cacheable = enabled && !client_iova && !(flags & ~reusable_flags) && size && size <= DARWIN_CACHE_MAX_BO;
+   /* TU_DARWIN_BO_CACHE=0 turns the cache off (the host checks of the release paths need every free to reach the kernel). */
+   static const bool cache_enabled = debug_get_bool_option("TU_DARWIN_BO_CACHE", true);
+   /* A lazy BO lies at its sparse VMA's range (darwin_sparse_vma_init) and goes back with that range, never to the cache. */
+   const bool cacheable = cache_enabled && !(flags & TU_BO_ALLOC_REPLAYABLE) && !lazy_vma;
    const bool read_only = !!(flags & TU_BO_ALLOC_GPU_READ_ONLY);
    uint64_t alloc_size = cacheable ? darwin_size_class(size) : size;
-   if (alloc_size != size) darwin_cache_fit_stats[0].fetch_add(1, std::memory_order_relaxed);
-   struct darwin_retired_bo hit = {};
+
+   uint64_t iova = 0, handle = 0;
+   void *cached_mapping = NULL;
+   uint32_t cached_token = 0;
    bool reused = false;
    if (cacheable) {
+      struct darwin_cached_bo hit;
       pthread_mutex_lock(&retire->lock);
       reused = darwin_cache_get(retire, alloc_size, read_only, !!(flags & TU_BO_ALLOC_INTERNAL_RESOURCE), &hit);
       pthread_mutex_unlock(&retire->lock);
+      if (reused) {
+         handle = hit.handle;
+         alloc_size = hit.size;
+         iova = hit.iova;
+         cached_mapping = hit.mapping;
+         cached_token = hit.token;
+         /* Device-internal BOs may rely on the zeroes a new BO has; application memory may not. */
+         if ((flags & TU_BO_ALLOC_INTERNAL_RESOURCE) && cached_mapping)
+            memset(cached_mapping, 0, size);
+      }
    }
-   uint64_t iova = reused ? hit.iova : 0;
-   NativeAdrenoAbiBoAllocReply reply = {};
-   reply.handle = hit.handle;
-   if (reused) alloc_size = hit.size;
-   if (reused && (flags & TU_BO_ALLOC_INTERNAL_RESOURCE))
-      memset(hit.mapping, 0, alloc_size);
+
    for (bool flushed = false; !reused;) {
-      VkResult result = darwin_allocate_iova(dev, alloc_size, client_iova, flags, &iova);
+      VkResult result = VK_SUCCESS;
+      if (lazy_vma)
+         iova = lazy_vma->msm.iova;
+      else
+         result = darwin_allocate_iova(dev, alloc_size, client_iova, flags, &iova);
       if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !flushed) {
          flushed = true;
          pthread_mutex_lock(&retire->lock);
-         bool released = darwin_cache_flush(dev, retire);
-         VkResult failure = retire->failure;
+         bool any = darwin_cache_flush(dev, retire);
          pthread_mutex_unlock(&retire->lock);
-         if (failure != VK_SUCCESS) return failure;
-         if (released) continue;
+         if (any)
+            continue;
       }
-      if (result != VK_SUCCESS) return result;
+      if (result != VK_SUCCESS)
+         return result;
+
       NativeAdrenoAbiBoAlloc alloc = {.bytes = alloc_size, .align_log2 = 12, .contiguous = 0};
+      NativeAdrenoAbiBoAllocReply reply = {};
       kern_return_t kr = dw_call(NativeAdrenoMethodBoAlloc, &alloc, sizeof(alloc), &reply, sizeof(reply));
       if (kr != KERN_SUCCESS) {
-         darwin_free_iova(dev, iova, alloc_size);
-         if (!flushed) {
+         if (!lazy_vma)
+            darwin_free_iova(dev, iova, alloc_size);
+         if (!flushed) {   /* memory may be held by cached BOs */
             flushed = true;
             pthread_mutex_lock(&retire->lock);
-            bool released = darwin_cache_flush(dev, retire);
-            VkResult failure = retire->failure;
+            bool any = darwin_cache_flush(dev, retire);
             pthread_mutex_unlock(&retire->lock);
-            if (failure != VK_SUCCESS) return failure;
-            if (released) continue;
+            if (any)
+               continue;
          }
          return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY, "BoAlloc failed: 0x%x", kr);
       }
+
       NativeAdrenoAbiBoMap map = {
-         .handle = reply.handle, .iova = iova, .permissions = read_only ? 1u : 3u,
-         .writeback = 0, .shareability = 2,
+         .handle = reply.handle,
+         .iova = iova,
+         .permissions = read_only ? 1u : 3u,
+         .writeback = 0,
+         .shareability = 2,
       };
       NativeAdrenoAbiBoMapReply mapped = {};
       kr = dw_call(NativeAdrenoMethodBoMap, &map, sizeof(map), &mapped, sizeof(mapped));
-      if (kr != KERN_SUCCESS) return darwin_map_failure(dev, reply.handle, iova, alloc_size, kr);
-      if (cacheable) {
-         darwin_cache_fit_stats[2].fetch_add(1, std::memory_order_relaxed);
-         darwin_cache_fit_stats[3].fetch_add(alloc_size, std::memory_order_relaxed);
+      if (kr != KERN_SUCCESS) {
+         return darwin_map_failure(dev, reply.handle, iova, alloc_size, kr, !lazy_vma);
       }
+      handle = reply.handle;
       break;
    }
 
-   uint32_t gem_handle = (uint32_t)reply.handle;
+   uint32_t gem_handle = (uint32_t)handle;
    struct tu_bo *bo = tu_device_lookup_bo(dev, gem_handle);
    assert(bo && bo->gem_handle == 0);
 
@@ -619,18 +897,20 @@ darwin_bo_init(struct tu_device *dev, struct vk_object_base *base,
       .refcnt = 1,
       .implicit_sync = !!(flags & TU_BO_ALLOC_IMPLICIT_SYNC),
       .base = base,
-      .unique_id = reply.handle,
+      .unique_id = handle,
    };
-   bo->darwin_handle = reply.handle;
-   bo->darwin_cacheable = cacheable;
+   bo->darwin_handle = handle;
    bo->darwin_alloc_size = cacheable ? alloc_size : 0;
    bo->darwin_read_only = read_only;
-   if (reused && hit.mapping) {
-      bo->map = hit.mapping;
-      bo->darwin_token = hit.token;
+   if (reused && cached_mapping) {
+      bo->map = cached_mapping;
+      bo->darwin_token = cached_token;
       bo->never_unmap = true;
    }
-
+   if (lazy_vma) {
+      lazy_vma->msm.backs_lazy_bo = true;   /* the range now goes back with the BO */
+      bo->lazy = true;
+   }
 
    tu_dump_bo_init(dev, bo);
    TU_RMV(bo_allocate, dev, bo);
@@ -721,10 +1001,12 @@ darwin_bo_map(struct tu_device *dev, struct tu_bo *bo, void *placed_addr)
    /* IOUserClient::mapClientMemory64 takes the cache mode from THESE flags, not from the descriptor the driver returns, so a plain
     * kIOMapAnywhere would give a cached mapping of memory the GPU reads non-cacheable. Write combine is Normal non-cacheable: the
     * GPU sees CPU writes after a barrier, and memcpy/unaligned stores stay legal (device-memory mappings fault on those). */
-   uint32_t options = (placed_addr ? 0 : kIOMapAnywhere) | kIOMapWriteCombineCache;
+   /* With IO-coherent BOs (the kernel reports NativeAdrenoParamsOwnedCoherent) the GPU maps the pages write-back inner-shareable, so the CPU
+    * view is a write-back one too: a write-combined view of a page the GPU snoops and the kernel's cacheable alias would disagree. */
+   uint32_t options = (placed_addr ? 0 : kIOMapAnywhere) |
+                      kIOMapWriteCombineCache /* v1 flag 2 means SubmitBatch, never OwnedCoherent */;
    kr = IOConnectMapMemory64(dw.conn, reply.token, mach_task_self(), &address, &length, options);
-   const uint64_t map_size = bo->darwin_alloc_size ? bo->darwin_alloc_size : bo->size;
-   if (kr != KERN_SUCCESS || !address || length < map_size) {
+   if (kr != KERN_SUCCESS || !address || length < bo->size) {
       NativeAdrenoAbiBoCpuUnmap undo = {.handle = bo->darwin_handle, .token = reply.token};
       dw_call(NativeAdrenoMethodBoCpuUnmap, &undo, sizeof(undo), NULL, 0);
       return vk_errorf(dev, VK_ERROR_MEMORY_MAP_FAILED, "IOConnectMapMemory64 failed: 0x%x", kr);
@@ -776,7 +1058,7 @@ darwin_wait_idle(struct tu_device *dev)
    uint32_t last = dw.last_fence;
    pthread_mutex_unlock(&dw.lock);
    if (last)
-      return dw_wait_fence_locked_free(dev, last, os_time_get_nano() + 5000000000ull);
+      return dw_wait_fence_locked_free(dev, last, UINT64_MAX);   /* the kernel's hangcheck ends a hang */
    return VK_SUCCESS;
 }
 
@@ -802,37 +1084,37 @@ darwin_bo_finish(struct tu_device *dev, struct tu_bo *bo)
    struct darwin_retire_state *retire = (struct darwin_retire_state *)dev->darwin_retire;
    pthread_mutex_lock(&retire->lock);
    darwin_reap_locked(dev, retire);
-   if (retire->count == DARWIN_RETIRED_BOS && retire->failure == VK_SUCCESS) {
-      ++retire->pressure_waits;
-      pthread_mutex_unlock(&retire->lock);
-      VkResult waited = darwin_wait_idle(dev);
-      pthread_mutex_lock(&retire->lock);
-      if (waited != VK_SUCCESS)
-         retire->failure = vk_device_set_lost(&dev->vk, "deferred BO pressure wait failed");
-      else
-         darwin_reap_locked(dev, retire);
+   if (retire->count == retire->capacity && retire->failure == VK_SUCCESS) {
+      /* The ring grows, its records in order from the head. */
+      const unsigned capacity = retire->capacity ? retire->capacity * 2 : 64;
+      struct darwin_retired_bo *entries = (struct darwin_retired_bo *)calloc(capacity, sizeof(*entries));
+      if (entries) {
+         for (unsigned i = 0; i < retire->count; ++i)
+            entries[i] = retire->entries[(retire->head + i) % retire->capacity];
+         free(retire->entries);
+         retire->entries = entries;
+         retire->capacity = capacity;
+         retire->head = 0;
+      }
    }
-   if (retire->count < DARWIN_RETIRED_BOS) {
+   if (retire->count < retire->capacity) {
       pthread_mutex_lock(&dw.lock);
       uint32_t fence = dw.last_fence;
       pthread_mutex_unlock(&dw.lock);
-      unsigned slot = (retire->head + retire->count) % DARWIN_RETIRED_BOS;
-      retire->entries[slot] = {bo->darwin_handle, bo->iova, bo->darwin_alloc_size ? bo->darwin_alloc_size : bo->size,
-                             bo->map, bo->darwin_token, fence,
-                             bo->darwin_cacheable, bo->darwin_read_only};
+      unsigned slot = (retire->head + retire->count) % retire->capacity;
+      retire->entries[slot] = {bo->darwin_handle, bo->iova, bo->darwin_alloc_size ? bo->darwin_alloc_size : bo->size, bo->map,
+                               bo->darwin_token, fence, bo->darwin_alloc_size != 0, bo->darwin_read_only};
       ++retire->count;
       ++retire->enqueued;
-      /* data-a-live (tools/turnip/pandora_bo_finish_order.py): the BO structs live in a sparse array indexed by
-       * the kernel slot: zero the entry before the reap below can free that slot, which the next BoAlloc of any
-       * thread may get and fill this same struct with (msm_bo_gem_close zeroes before GEM_CLOSE likewise). */
-      memset(bo, 0, sizeof(*bo));
       darwin_reap_locked(dev, retire);
-   } else {
+   } else if (retire->failure == VK_SUCCESS) {
       /* No reusable range is reported on error. The kernel still owns the handle
        * and view; connection teardown must drain them, even if this record cannot fit. */
-      retire->failure = vk_device_set_lost(&dev->vk, "deferred BO queue remains full; retaining native allocation");
-      memset(bo, 0, sizeof(*bo));
+      retire->failure = vk_device_set_lost(&dev->vk, "deferred BO queue cannot grow; retaining native allocation");
    }
+   /* Publish the free sparse slot while the allocator still holds this lock.
+    * A concurrent cache allocation must not reuse it before the final clear. */
+   memset(bo, 0, sizeof(*bo));
    pthread_mutex_unlock(&retire->lock);
 
    u_rwlock_rdunlock(&dev->dma_bo_lock);
@@ -1053,51 +1335,103 @@ darwin_note_fence(uint32_t fence)
    dw.last_fence = fence;
 }
 
-/* Query-negotiated batching keeps the legacy wire record intact. Never probe
- * support by retrying a submitted batch: an error may follow a device kick. */
-static unsigned
-darwin_submit_limit(void)
+#ifdef __APPLE__
+/* The clock every trace of the stack uses (CLOCK_UPTIME_RAW: the kernel's mach_absolute_time and the frontend's nowUs()), so rows join by time. */
+static inline uint64_t tu_trace_clock_ns(void) {return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);}
+#else
+static inline uint64_t tu_trace_clock_ns(void) {return os_time_get_nano();}
+#endif
+
+/* The last 512 kernel submissions of this process (tu_darwin_submit_ring_read): when each was handed to the kernel, which fence it got,
+ * and where its time went before and inside the call (waiting for an unsubmitted sync, the kernel's ring having no room).
+ */
+struct tu_darwin_submit_rec {
+   uint64_t ns;            /* os_time_get_nano() when darwin_queue_submit began */
+   uint32_t seq;
+   uint32_t fence;         /* the kernel fence of the last chunk, 0 when nothing was run */
+   uint32_t sync_wait_us;  /* waiting for a sync that was not yet submitted */
+   uint32_t call_us;       /* the kernel calls, ring-space waits included */
+   uint32_t space_wait_us; /* of call_us, waiting for ring space */
+   uint16_t busy;          /* kIOReturnBusy answers */
+   uint8_t chunks;
+   uint8_t buffers;        /* indirect buffers in all chunks, 255 at most */
+};
+static_assert(sizeof(struct tu_darwin_submit_rec) == 32, "submit record");
+static struct tu_darwin_submit_rec darwin_submit_ring[512];
+static uint32_t darwin_submit_seq;
+
+/* The host's diagnostics switch (SHENG_DIAG, set by the plugin from sheng-diag=1): without it no submission is kept in the ring. */
+static bool
+darwin_submit_trace_on(void)
 {
-   return (dw.params.flags & NativeAdrenoParamsSubmitBatch) ?
-      NativeAdrenoAbiMaxBatchBuffers : NativeAdrenoAbiMaxBuffers;
+   static int on = -1;
+   if (on < 0)
+      on = getenv("SHENG_DIAG") != NULL;
+   return on;
 }
 
-/* One kernel submission; waits for the oldest job when all eight slots are taken. */
+extern "C" __attribute__((visibility("default"))) uint32_t tu_darwin_submit_ring_read(uint32_t from, struct tu_darwin_submit_rec *out,
+                                                                                    uint32_t max, uint32_t *newest);
+extern "C" __attribute__((visibility("default"))) uint32_t
+tu_darwin_submit_ring_read(uint32_t from, struct tu_darwin_submit_rec *out, uint32_t max, uint32_t *newest)
+{
+   const uint32_t last = p_atomic_read(&darwin_submit_seq);
+   *newest = last;
+   uint32_t first = from ? from : 1;
+   if (first > last)
+      return 0;
+   if (last - first >= 512)
+      first = last - 511;
+   uint32_t n = 0;
+   for (uint32_t s = first; s <= last && n < max; s++) {
+      const struct tu_darwin_submit_rec rec = darwin_submit_ring[s % 512];
+      if (rec.seq == s)
+         out[n++] = rec;
+   }
+   return n;
+}
+
+/* One kernel submission of up to NativeAdrenoAbiMaxBuffers indirect buffers; while the kernel's ring has no room (kIOReturnBusy, as msm
+ * waits for ring space) it waits for this client's oldest job, or yields when none is in flight. */
 static VkResult
 darwin_submit_chunk(struct tu_queue *queue, const NativeAdrenoAbiSubmitBuffer *entries,
-                    unsigned count, uint32_t *fence)
+                    unsigned count, uint32_t *fence, struct tu_darwin_submit_rec *rec)
 {
    struct tu_device *dev = queue->device;
-   if (!count || count > darwin_submit_limit())
-      return vk_device_set_lost(&dev->vk, "invalid native submit batch size: %u", count);
+   const bool batch = (dw.params.flags & NativeAdrenoParamsSubmitBatch) != 0;
    NativeAdrenoAbiSubmitBatch req = {};
+   if (!count || count > (batch ? NativeAdrenoAbiMaxBatchBuffers : NativeAdrenoAbiMaxBuffers))
+      return vk_device_set_lost(&dev->vk, "invalid v1 submission length");
    req.buffer_count = count;
    req.queue = 0;
    for (unsigned i = 0; i < count; i++)
       req.buffers[i] = entries[i];
-   const bool batch = dw.params.flags & NativeAdrenoParamsSubmitBatch;
-   const uint32_t method = batch ? NativeAdrenoMethodSubmitBatch : NativeAdrenoMethodSubmit;
-   const size_t request_bytes = batch ? sizeof(req) : sizeof(NativeAdrenoAbiSubmit);
 
-   for (unsigned attempt = 0; attempt < 64; attempt++) {
+   for (;;) {
       NativeAdrenoAbiSubmitReply reply = {};
-      kern_return_t kr = dw_call(method, &req, request_bytes, &reply, sizeof(reply));
+      const uint64_t began = tu_trace_clock_ns();
+      kern_return_t kr = dw_call(batch ? NativeAdrenoMethodSubmitBatch : NativeAdrenoMethodSubmit,
+                                 &req, batch ? sizeof(req) : sizeof(NativeAdrenoAbiSubmit),
+                                 &reply, sizeof(reply));
+      rec->call_us += (uint32_t)MIN2((tu_trace_clock_ns() - began) / 1000, 0xffffffffull - rec->call_us);
       if (kr == KERN_SUCCESS) {
          *fence = (uint32_t)reply.fence;
          return VK_SUCCESS;
       }
       if (kr != kIOReturnBusy)
          return vk_device_set_lost(&dev->vk, "submit failed: 0x%x", kr);
+      rec->busy++;
 
       pthread_mutex_lock(&dw.lock);
       uint32_t oldest = dw.inflight_count ? dw.inflight[0] : 0;
       pthread_mutex_unlock(&dw.lock);
+      const uint64_t waited = tu_trace_clock_ns();
       if (!oldest)
-         usleep(100);
-      else if (dw_wait_fence_locked_free(dev, oldest, os_time_get_nano() + 5000000000ull) != VK_SUCCESS)
-         return vk_device_set_lost(&dev->vk, "submit: GPU did not retire a job");
+         sched_yield();
+      else if (dw_wait_fence_locked_free(dev, oldest, UINT64_MAX) != VK_SUCCESS)
+         return vk_device_set_lost(&dev->vk, "submit: waiting for ring space failed");
+      rec->space_wait_us += (uint32_t)((tu_trace_clock_ns() - waited) / 1000);
    }
-   return vk_device_set_lost(&dev->vk, "submit: no free job slot");
 }
 
 static VkResult
@@ -1109,39 +1443,58 @@ darwin_queue_submit(struct tu_queue *queue, void *_submit,
    struct tu_darwin_queue_submit *submit = (struct tu_darwin_queue_submit *)_submit;
    struct tu_device *dev = queue->device;
 
-   /* The kernel client has one ring and no GPU-side waits: wait on the CPU before submitting. */
+   /* Syncs belong to this client, whose Vulkan queues all use kernel queue 0.
+    * That queue stays on one ring until its outstanding prefix completes, including
+    * when its priority changes. A resolved fence therefore precedes this submission.
+    * Wait-before-signal still waits until the producer has submitted. */
+   struct tu_darwin_submit_rec rec = {};
+   rec.ns = tu_trace_clock_ns();
    for (uint32_t i = 0; i < wait_count; i++) {
       struct vk_darwin_sync *s = container_of(waits[i].sync, struct vk_darwin_sync, vk);
-      VkResult result = darwin_sync_wait(dev, s, UINT64_MAX);
-      if (result != VK_SUCCESS)
-         return vk_device_set_lost(&dev->vk, "wait before submit failed");
+      /* tu_queue_submit() holds submit_mutex here (tu_queue.cc), which the wait releases while it sleeps. */
+      tu_frame_event(43,(uintptr_t)submit,0,(uintptr_t)s,s->state,s->fence,waits[i].wait_value);
+      while (s->state == DARWIN_SYNC_UNSIGNALED)
+         pthread_cond_wait(&dev->timeline_cond, &dev->submit_mutex);
    }
+   rec.sync_wait_us = (uint32_t)((tu_trace_clock_ns() - rec.ns) / 1000);
 
    uint32_t fence = 0;
    const unsigned total = util_dynarray_num_elements(&submit->commands, NativeAdrenoAbiSubmitBuffer);
    if (total) {
       const NativeAdrenoAbiSubmitBuffer *all =
          util_dynarray_element(&submit->commands, NativeAdrenoAbiSubmitBuffer, 0);
-      const unsigned limit = darwin_submit_limit();
+      const unsigned limit = (dw.params.flags & NativeAdrenoParamsSubmitBatch) ?
+         NativeAdrenoAbiMaxBatchBuffers : NativeAdrenoAbiMaxBuffers;
       for (unsigned at = 0; at < total; at += limit) {
          unsigned count = MIN2(total - at, limit);
          uint32_t chunk_fence = 0;
-         VkResult result = darwin_submit_chunk(queue, all + at, count, &chunk_fence);
+         VkResult result = darwin_submit_chunk(queue, all + at, count, &chunk_fence, &rec);
          if (result != VK_SUCCESS)
             return result;
+         rec.chunks++;
          pthread_mutex_lock(&dw.lock);
          darwin_note_fence(chunk_fence);
          pthread_mutex_unlock(&dw.lock);
          fence = chunk_fence;
+         tu_frame_event(38,(uintptr_t)submit,chunk_fence,at,count,rec.busy,rec.space_wait_us,wait_count,signal_count);
       }
       p_atomic_set(&queue->fence, fence);
+      rec.buffers = MIN2(total, 255u);
    } else {
       /* Nothing to run: the signals resolve with the last earlier submission. */
       fence = p_atomic_read(&queue->fence) > 0 ? (uint32_t)p_atomic_read(&queue->fence) : 0;
    }
 
+   rec.fence = fence;
+   if (darwin_submit_trace_on()) {
+      const uint32_t seq = p_atomic_inc_return(&darwin_submit_seq);
+      rec.seq = seq;
+      darwin_submit_ring[seq % 512] = rec;
+   }
+
    for (uint32_t i = 0; i < signal_count; i++) {
       struct vk_darwin_sync *s = container_of(signals[i].sync, struct vk_darwin_sync, vk);
+      tu_frame_event(43,(uintptr_t)submit,1,(uintptr_t)s,s->state,fence,signals[i].signal_value);
       s->fence = fence;
       s->state = fence ? DARWIN_SYNC_FENCE : DARWIN_SYNC_SIGNALED;
    }
@@ -1175,8 +1528,9 @@ darwin_device_init(struct tu_device *dev)
       return vk_error(dev, VK_ERROR_INITIALIZATION_FAILED);
    }
    dev->darwin_retire = retire;
-   retire->pressure_seen = darwin_memory_pressure.load(std::memory_order_relaxed);
+   darwin_stats_state = retire;
    darwin_watch_memory_pressure();
+   retire->pressure_seen = p_atomic_read(&darwin_memory_pressure);
    return VK_SUCCESS;
 }
 
@@ -1193,9 +1547,14 @@ darwin_device_finish(struct tu_device *dev)
          mesa_logi("darwin BO retirement: enqueued=%llu reaped=%llu pending-at-close=%u pressure=%llu",
                    (unsigned long long)retire->enqueued, (unsigned long long)retire->reaped,
                    retire->count, (unsigned long long)retire->pressure_waits);
-      darwin_cache_stats[5].fetch_sub(retire->cache_bytes, std::memory_order_relaxed);
-      darwin_cache_stats[7].fetch_sub(retire->cache_count, std::memory_order_relaxed);
+      if (retire->cache_stats.lookups)
+         darwin_cache_log(retire);
+      darwin_stats_state = NULL;
+      rb_tree_foreach_safe(struct darwin_va_hole, hole, &retire->va.address, by_address)
+         free(hole);
       pthread_mutex_destroy(&retire->lock);
+      free(retire->entries);
+      free(retire->cache);
       vk_free(&dev->vk.alloc, retire);
       dev->darwin_retire = NULL;
    }
@@ -1238,17 +1597,37 @@ darwin_device_check_status(struct tu_device *device)
    return VK_SUCCESS;
 }
 
+/* Lazily allocated memory (VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT), as the msm backend gives it with a settable GPU address
+ * (msm_sparse_vma_init, msm_bo_init): the memory is a GPU range alone until a pass needs its bytes (tu_allocate_transient_attachments: a
+ * sysmem pass, a load or store, LRZ), when a BO is made at that range. A transient attachment a GMEM pass neither loads nor stores never
+ * gets one: Metal's memoryless textures, which Core Animation's render server uses for its intermediate targets, take no memory, as on
+ * Apple's GPUs (untagged-feaf29203: twelve 3048x2032 RGBA16F textures, 758 MiB, held as memory of their own without it). A BO made at
+ * the range owns it from then on and hands it back with itself, after its last submission (darwin_release_native); otherwise the VMA
+ * hands it back. */
 static VkResult
 darwin_sparse_vma_init(struct tu_device *dev, struct vk_object_base *base,
                        struct tu_sparse_vma *out_vma, uint64_t *out_iova,
                        enum tu_sparse_vma_flags flags, uint64_t size, uint64_t client_iova)
 {
-   return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
+   if (flags & TU_SPARSE_VMA_MAP_ZERO)
+      return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);   /* no null mapping: sparse residency is not offered */
+   out_vma->flags = flags;
+   out_vma->msm.size = size;
+   out_vma->msm.backs_lazy_bo = false;
+   VkResult result = darwin_allocate_iova(dev, size, client_iova,
+                                          (flags & TU_SPARSE_VMA_REPLAYABLE) ? TU_BO_ALLOC_REPLAYABLE : TU_BO_ALLOC_NO_FLAGS,
+                                          &out_vma->msm.iova);
+   if (result != VK_SUCCESS)
+      return result;
+   *out_iova = out_vma->msm.iova;
+   return VK_SUCCESS;
 }
 
 static void
 darwin_sparse_vma_finish(struct tu_device *dev, struct tu_sparse_vma *vma)
 {
+   if (!vma->msm.backs_lazy_bo)
+      darwin_free_iova(dev, vma->msm.iova, vma->msm.size);
 }
 
 static const struct tu_knl darwin_knl_funcs = {
@@ -1324,7 +1703,11 @@ tu_knl_darwin_load(struct tu_instance *instance)
    device->has_set_iova = !!(info->flags & NativeAdrenoDeviceClientIova);
    device->va_start = info->va_start;
    device->va_size = info->va_size;
-   device->has_lazy_bos = false;
+   /* Lazily allocated memory only where passes may keep attachments in tile memory (darwin_sparse_vma_init). With every pass in system
+    * memory (TU_DEBUG=sysmem) a lazy BO is backed in full at the first pass, on the render thread: 40-112 MiB wired inside
+    * vkCmdEndRenderPass, up to 340 ms each (untagged-3f2bd680), and freed again with the memory. Without the type a memoryless
+    * attachment is ordinary device memory, which the runtime places and keeps spare for the next one. */
+   device->has_lazy_bos = !TU_DEBUG(SYSMEM);
    device->has_sparse = false;
    device->has_sparse_prr = false;
    device->has_raytracing = false;
@@ -1344,10 +1727,7 @@ tu_knl_darwin_load(struct tu_instance *instance)
    device->sync_types[1] = &device->timeline_type.sync;
    device->sync_types[2] = NULL;
 
-   /* Physical RAM is not the process's GPU address capacity. The native
-    * driver scopes each client to one window of a shared GPU address space;
-    * advertising all system RAM encourages caches that cannot be mapped. */
-   device->heap.size = MIN2(tu_get_system_heap_size(device), device->va_size);
+   device->heap.size = tu_get_system_heap_size(device);
    device->heap.used = 0u;
    device->heap.flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
 

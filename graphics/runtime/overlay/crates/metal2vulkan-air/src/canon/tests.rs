@@ -2393,10 +2393,7 @@ fn a_pointer_loaded_from_a_constant_globals_field_is_the_fields_constant() {
     // A field of any other first-class type reads the same way: the picked struct's own `i64`.
     for (flag, kept, gone) in [(1, "333", "444"), (0, "444", "333")] {
         let text = body_text(&picked_field(Some(flag), 1).unwrap());
-        assert!(
-            !text.contains("getelementptr") && !text.contains("load"),
-            "{text}"
-        );
+        assert!(!text.contains("getelementptr") && !text.contains("load"), "{text}");
         assert!(text.contains(kept) && !text.contains(gone), "{text}");
     }
     // Unsupplied, the select stays undecided, as before.

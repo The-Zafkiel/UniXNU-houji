@@ -949,41 +949,6 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-// Bounded, process-local diagnostics: requests and readback, never a claim about
-// CPU placement or actual latency. No logging on worker threads.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-static THREAD_QOS_COUNTS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
-
-/// Requested initiated/interactive, set errors, read errors, observed initiated/interactive.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[doc(hidden)]
-pub fn thread_qos_statistics() -> [u64; 6] {
-    std::array::from_fn(|i| THREAD_QOS_COUNTS[i].load(Ordering::Relaxed))
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn request_thread_qos(class: libc::qos_class_t, request_slot: usize) {
-    use libc::qos_class_t as Q;
-    THREAD_QOS_COUNTS[request_slot].fetch_add(1, Ordering::Relaxed);
-    // SAFETY: only the calling thread's own class, and live local out parameters.
-    let set = unsafe { libc::pthread_set_qos_class_self_np(class, 0) };
-    if set != 0 {
-        THREAD_QOS_COUNTS[2].fetch_add(1, Ordering::Relaxed);
-    }
-    let mut observed = Q::QOS_CLASS_UNSPECIFIED;
-    let mut relative = 0;
-    let read = unsafe {
-        libc::pthread_get_qos_class_np(libc::pthread_self(), &mut observed, &mut relative)
-    };
-    if read != 0 {
-        THREAD_QOS_COUNTS[3].fetch_add(1, Ordering::Relaxed);
-    } else if matches!(observed, Q::QOS_CLASS_USER_INITIATED) {
-        THREAD_QOS_COUNTS[4].fetch_add(1, Ordering::Relaxed);
-    } else if matches!(observed, Q::QOS_CLASS_USER_INTERACTIVE) {
-        THREAD_QOS_COUNTS[5].fetch_add(1, Ordering::Relaxed);
-    }
-}
-
 /// Raise this thread's quality of service to the user-initiated class where it is lower or
 /// unspecified, and leave the user-interactive class as it is: a thread of the runtime's own
 /// that issues the driver's compiles (the pool's, `pipeline/pool.rs`; a compile's own,
@@ -993,34 +958,19 @@ fn request_thread_qos(class: libc::qos_class_t, request_slot: usize) {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) fn raise_to_user_initiated() {
     if !at_least_user_initiated() {
-        request_thread_qos(libc::qos_class_t::QOS_CLASS_USER_INITIATED, 0);
+        // SAFETY: sets the calling thread's own class; no pointer.
+        unsafe {
+            libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INITIATED, 0)
+        };
     }
 }
 
-/// Nothing: no quality of service class here ([`raise_to_user_initiated`] on macOS).
+/// Nothing: no quality of service class here ([`raise_to_user_initiated`] on macOS and iOS).
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) fn raise_to_user_initiated() {}
 
-/// Lower this thread to the utility quality of service: a warm pass's thread (`warm/pass.rs`),
-/// whose translations nothing waits for. Its pipeline makings still compile at the
-/// user-initiated class, on a thread of their own (`device/compiles.rs`), and a thread it starts
-/// starts at the default class ([`spawn`]).
-#[cfg(target_os = "macos")]
-pub(crate) fn lower_to_utility() {
-    // SAFETY: sets the calling thread's own class; no pointer.
-    unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) };
-}
-
-/// Nothing elsewhere: a Linux thread's nice value passes to the threads it starts, and the warm
-/// pass starts the pipeline pool's, which serve the program ([`lower_to_utility`] on macOS).
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn lower_to_utility() {}
-
 /// Run this thread at the user-interactive quality of service, whatever its class: a thread of
 /// the runtime's own that takes command buffers to their handlers ([`spawn_user_interactive`]).
-// The public pthread QoS APIs are available on iOS 8 and later as well.
-// This consumer port requests the same classes there; hardware latency is
-// qualified separately from the upstream macOS measurements below.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn run_at_user_interactive() {
     // Metal runs every command buffer's scheduled and completed handlers at the user-interactive
@@ -1029,7 +979,10 @@ fn run_at_user_interactive() {
     // threads that bring a command buffer to its handlers, and run them, run there too. It is a
     // request of the documented `pthread_set_qos_class_self_np` (`<pthread/qos.h>`): the system
     // still places the thread, which is bound to no CPU, and no option or variable turns it off.
-    request_thread_qos(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 1);
+    // SAFETY: sets the calling thread's own class; no pointer.
+    unsafe {
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0)
+    };
 }
 
 /// Ask the scheduler to treat this thread as fully busy whenever it runs, and no thread it starts:
@@ -1159,7 +1112,7 @@ pub(crate) fn at_least_user_initiated() -> bool {
         )
 }
 
-/// Always: no quality of service class here ([`at_least_user_initiated`] on macOS).
+/// Always: no quality of service class here ([`at_least_user_initiated`] on macOS and iOS).
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) fn at_least_user_initiated() -> bool {
     true

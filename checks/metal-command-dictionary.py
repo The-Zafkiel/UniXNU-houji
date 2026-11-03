@@ -6,16 +6,33 @@ ROOT=Path(__file__).resolve().parents[1]
 text=(ROOT/'graphics/metal/AdrenoMetal/NativeBridgeMetalFrontend.mm').read_text()
 interface=text.split('@interface NBCommandBuffer : NBObject {',1)[1].split('@end',1)[0]
 properties='\n'.join(line for line in interface.splitlines() if line.startswith('@property') and not any(word in line for word in ['NmbCommandBuffer','NBQueue']))
-method=re.search(r'@implementation NBCommandBuffer\n(- \(instancetype\)init \{[\s\S]+?\n})',text)[1]
+# The new frontend stores the dictionary lazily as an associated object.
+start=text.index('- (id)userDictionary {'); end=text.index('\n}',start)+2
+method=text[start:end]
 unit='''#import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
 #include <cassert>
-static uint64_t nowUs(){return 1;}
-@interface Fixture:NSObject {uint64_t createdUs;}
-'''+properties+'''\n@end
-@implementation Fixture
+#include <objc/runtime.h>
+#include "NativeMetalProtocols.h"
+static char kUserDictionaryKey;
+@interface NBCommandBuffer:NSObject {uint64_t createdUs;}
+@property(nonatomic,readonly) NSMutableDictionary *userDictionary;\n@end
+@implementation NBCommandBuffer
 '''+method+'''\n@end
 int main(){@autoreleasepool {
- Fixture *a=[Fixture new],*b=[Fixture new];
+ NBCommandBuffer *a=[NBCommandBuffer new],*b=[NBCommandBuffer new];
+ // MPS checks conformance before consulting the dictionary. Exercise that
+ // gate using real host Metal protocols and the production registration code.
+ assert(![a conformsToProtocol:@protocol(MTLCommandBuffer)]);
+ for(const auto &binding:native_metal_protocols::bindings) {
+  assert(binding.protocol && protocol_getName(binding.protocol));
+ }
+ assert(sizeof(native_metal_protocols::bindings)/sizeof(native_metal_protocols::bindings[0])==19);
+ assert(native_metal_protocols::install()==1);
+ assert([a conformsToProtocol:@protocol(MTLCommandBuffer)]);
+ assert(![a conformsToProtocol:@protocol(MTLResource)]);
+ assert(![[NSObject new] conformsToProtocol:@protocol(MTLCommandBuffer)]);
+ assert(native_metal_protocols::install()==1);
  assert(a.userDictionary && b.userDictionary && a.userDictionary!=b.userDictionary);
  NSMutableDictionary *saved=a.userDictionary;
  __weak NSObject *value;
@@ -24,9 +41,9 @@ int main(){@autoreleasepool {
  a.userDictionary[@"counter"]=@42;assert([saved[@"counter"] isEqual:@42]);
  [a.userDictionary removeObjectForKey:@"owner"];assert(!value);
  assert(![a respondsToSelector:NSSelectorFromString(@"setUserDictionary:")]);
- }puts("PASS: actual command-buffer initializer retains an independent mutable SPI dictionary, stable identity, retained/released values and readonly property; no GPU");}
+ }puts("PASS: command-buffer protocol gate and actual initializer retain an independent mutable SPI dictionary, stable identity, retained/released values and readonly property; no GPU");}
 '''
 with tempfile.TemporaryDirectory(prefix='houji-command-dictionary-') as directory:
     source,binary=Path(directory)/'check.mm',Path(directory)/'check';source.write_text(unit)
-    subprocess.run(['xcrun','clang++','-std=c++17','-fobjc-arc','-fblocks','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-framework','Foundation',str(source),'-o',str(binary)],check=True)
+    subprocess.run(['xcrun','clang++','-std=c++17','-fobjc-arc','-fblocks','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-framework','Foundation','-framework','Metal','-I'+str(ROOT/'graphics/metal/AdrenoMetal'),str(source),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True)

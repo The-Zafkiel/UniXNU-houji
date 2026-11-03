@@ -10,6 +10,7 @@ static struct {
  unsigned mode,requested,retained,ufs_proven,fs_trial,coexist,deny,phase,code,draws,pending_read,pending_write,worker;
  uint64_t dma_pa,dma_owned;uint32_t before_fence,after_fence,crc;
 } gHoujiLive;
+static bool gHoujiLiveDiagnostics;
 static bool houjiNativeGpuFsAllowed(void){
  if(!gHoujiFull.possible)return true;
  if(__atomic_load_n(&gHoujiLive.deny,__ATOMIC_ACQUIRE))return false;
@@ -105,7 +106,7 @@ static void houjiLiveDeadline(void*,wait_result_t){
  while(houjiSubmitNow(nullptr)-began<(gHoujiLive.mode==3?210000000ull:360000000ull))IOSleep(1000);
  /* Independent of provider/VFS locks. All device resources remain pinned;
   * the host prearmed recovery BCB. Panic recovery does no filesystem I/O. */
- native_adreno_provider_snapshot();panic("HOUJI LIVE: independent runtime deadline; retained resources, PSCI-only recovery, no FS");
+ if(gHoujiLiveDiagnostics)native_adreno_provider_snapshot();panic("HOUJI LIVE: independent runtime deadline; retained resources, PSCI-only recovery, no FS");
 }
 static void houjiLiveWorker(void*,wait_result_t){
  thread_set_thread_name(current_thread(),"houji-gpu-owner");auto&l=gHoujiLive;uint64_t started=houjiSubmitNow(nullptr),busy_since=0,last_saved=UINT64_MAX,last_report=0,last_desktop_save=0,first_draw=0,first_fence=0,base_swaps=0,base_presents=0;unsigned checks=0,probe_state=0;
@@ -130,11 +131,13 @@ static void houjiLiveWorker(void*,wait_result_t){
    uint64_t now=houjiSubmitNow(nullptr);
    if(now-last_report>=5000000){
     uint64_t stats[7]={},swaps=0,presents=0;IOReturn observed=native_adreno_provider_desktop_stats(stats);houji_framebuffer_counts(&swaps,&presents);last_report=now;
-    IOLog("HOUJI DESKTOP: observed=%x backboard-submits=%llu waits=%llu submit-errors=%llu client-last-fence=%llu real-completed=%llu jobs=%llu ring-last=%llu swaps=%llu presents=%llu elapsed-us=%llu; actual IOKit caller and GPU fence\n",observed,stats[0],stats[1],stats[2],stats[3],stats[4],stats[5],stats[6],swaps-base_swaps,presents-base_presents,now-started);
-    houji_framebuffer_report();
+    if(gHoujiLiveDiagnostics){
+     IOLog("HOUJI DESKTOP: observed=%x backboard-submits=%llu waits=%llu submit-errors=%llu client-last-fence=%llu real-completed=%llu jobs=%llu ring-last=%llu swaps=%llu presents=%llu elapsed-us=%llu; actual IOKit caller and GPU fence\n",observed,stats[0],stats[1],stats[2],stats[3],stats[4],stats[5],stats[6],swaps-base_swaps,presents-base_presents,now-started);
+     houji_framebuffer_report();
+    }
     if(!observed && stats[0] && !first_draw){first_draw=now;first_fence=stats[4];}
     if(!observed && stats[2]){l.code=15;break;}
-    if(now-last_desktop_save>=20000000){houji_touch_driver_report();houji_managed_physical_map_debug_report();houjiProviderPerfReport();native_adreno_provider_snapshot();if(houjiNativeGpuFsAllowed())houji_ufs_checkpoint("desktop actual-submit/fence/display sampling; no GPU gate held",0);last_desktop_save=now;}
+    if(gHoujiLiveDiagnostics && now-last_desktop_save>=20000000){houji_touch_driver_report();houji_managed_physical_map_debug_report();houjiProviderPerfReport();native_adreno_provider_snapshot();if(houjiNativeGpuFsAllowed())houji_ufs_checkpoint("desktop actual-submit/fence/display sampling; no GPU gate held",0);last_desktop_save=now;}
     /* Short interaction trials after r242's measured thermal limiting. Keep
      * two minutes after first draw, with a three-minute worker ceiling and
      * independent 210-second recovery guard. This does not qualify complete
@@ -151,18 +154,21 @@ static void houjiLiveWorker(void*,wait_result_t){
    if(houjiSubmitNow(nullptr)-started>=300000000)break;
   }else if(checks>=100)break;
  }
- houjiProviderPerfReport();native_adreno_provider_snapshot();IOLog("HOUJI LIVE LIFETIME: worker=%u mode=%u checks=%u elapsed-us=%llu probe-state=%u code=%u fence=%u/%u; original roots and all active BO retained\n",l.worker,l.mode,checks,houjiSubmitNow(nullptr)-started,probe_state,l.code,gHoujiSubmit.seq,gHoujiSubmit.observed);
+ if(gHoujiLiveDiagnostics){houjiProviderPerfReport();native_adreno_provider_snapshot();IOLog("HOUJI LIVE LIFETIME: worker=%u mode=%u checks=%u elapsed-us=%llu probe-state=%u code=%u fence=%u/%u; original roots and all active BO retained\n",l.worker,l.mode,checks,houjiSubmitNow(nullptr)-started,probe_state,l.code,gHoujiSubmit.seq,gHoujiSubmit.observed);}
  gHoujiApi.in_op=1;
  if(native_adreno_provider_stop(houjiProviderReset,nullptr)){__atomic_store_n(&l.deny,1u,__ATOMIC_RELEASE);panic("HOUJI LIVE: stop/isolation uncertain; no FS, every BO retained");}
  gHoujiApi.status.noteSuspend();gHoujiCp.active=0;gHoujiFull.active=0;gHoujiSubmit.active=0;gHoujiApi.in_op=gHoujiApi.active=0;
  /* Commit terminal GPU/call state before any diagnostic vnode lookup can block. */
- houjiFullReport();houjiCpSaveFinal();
- if(l.mode==2){houjiProbeLogDump();houjiCpSaveFinal();}
- if(l.mode==3){houjiWallpaperLogDump();houjiCpSaveFinal();houjiKeyboardLogDump();houjiCpSaveFinal();}
+ if(gHoujiLiveDiagnostics){houjiFullReport();houjiCpSaveFinal();}
+ if(l.mode==2 && gHoujiLiveDiagnostics){houjiProbeLogDump();houjiCpSaveFinal();}
+ if(l.mode==3 && gHoujiLiveDiagnostics){houjiWallpaperLogDump();houjiCpSaveFinal();houjiKeyboardLogDump();houjiCpSaveFinal();}
  panic("HOUJI LIVE: runtime ended mode=%u code=%u; retained PSCI recovery",l.mode,l.code);
 }
 static bool houjiLiveStart(void){
  if(!houjiFullKeepLive(nullptr))return false;
+ // Startup qualification requires gLogEnabled. The CPU-only trace flag
+ // independently controls optional diagnostics after the live handoff.
+ int trace=0;gHoujiLiveDiagnostics=gLogEnabled && PE_parse_boot_argn("gtrace",&trace,sizeof trace) && trace==1;
  if(gHoujiLive.mode==4 || gHoujiLive.mode==5)houjiCoherenceTrial();
  if(houjiProviderStart())return false;
  houjiDvfsStart();

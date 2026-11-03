@@ -1827,3 +1827,48 @@ fn an_integer_threadgroup_address_outside_the_static_objects_is_refused() {
         }
     }
 }
+
+/// Indexed constant tables keep their values across the private/blob threshold,
+/// including a constant-expression pointer that enters halfway through the table.
+#[test]
+fn indexed_constant_tables_use_shared_storage_above_four_kib() {
+    for count in [1024, 1025, 4096] {
+        let values = (0..count)
+            .map(|i| format!("i32 {}", i * 3))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let globals = format!(
+            "@table = internal addrspace(2) constant [{count} x i32] [{values}], align 4\n"
+        );
+        let body = format!(
+            r#"  %p = getelementptr i32, ptr addrspace(2) getelementptr ([{count} x i32], ptr addrspace(2) @table, i64 0, i64 128), i32 %t
+  %v0 = load volatile i32, ptr addrspace(2) %p, align 4
+  %v1 = load volatile i32, ptr addrspace(2) getelementptr ([{count} x i32], ptr addrspace(2) @table, i64 0, i64 7), align 4"#
+        );
+        let Some(bc) = assemble(
+            &format!("indexed_table_{count}"),
+            &two_word_kernel("table_read", &globals, &body),
+        ) else {
+            return;
+        };
+        let prof = p("lavapipe");
+        l3(&bc, "table_read", &prof, "indexed_table");
+        let (plan, module) = typed_module(&bc, "table_read", &prof).expect("indexed table");
+        let blob = plan.families.access.blob.as_ref();
+        assert_eq!(blob.is_some(), count > 1024);
+        let mut res = resources(&plan, 0, 64, 32, &[]);
+        if let Some(blob) = blob {
+            res.buffers.push(Buffer {
+                slot: Some(ResourceSlot {
+                    stage: Stage::Kernel,
+                    kind: ResourceKind::Synthetic(SyntheticBinding::ConstantBlob),
+                    index: 0,
+                }),
+                address: None,
+                bytes: blob.bytes.to_vec(),
+            });
+        }
+        let want: Vec<u32> = (0..32).flat_map(|t| [(128 + t) * 3, 21]).collect();
+        assert_eq!(run_both(&module, &res).expect("table output"), want);
+    }
+}

@@ -47,7 +47,10 @@ void report(NSString *format, ...) {
         if (!( (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
                (*c >= '0' && *c <= '9') || *c == '_' || *c == '-' || *c == '.' )) return;
     char path[192];
-    snprintf(path, sizeof(path), "/private/var/mobile/Library/Logs/HoujiKeyboard-v18-%s.log", name);
+    // Status-bar diagnostics have their own bounded journal: the keyboard
+    // journal can already be full after many boots of the same system volume.
+    snprintf(path, sizeof(path), "/private/var/mobile/Library/Logs/%s-%s.log",
+             [line hasPrefix:@"HOUJI STATUSBAR "] ? "HoujiStatusBar-v5" : "HoujiKeyboard-v18", name);
     const int fd = open(path,
                         O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0600);
     if (fd < 0) return;
@@ -169,6 +172,6 @@ __attribute__((constructor)) void start() {
         report(@"HOUJI KEYBOARD v18: loaded in %s pid=%d", process, getpid());
         houji_status_bar::install();
     }
-    dispatch_async(dispatch_get_main_queue(), ^{ install(); });
+    dispatch_async(dispatch_get_main_queue(), ^{ houji_status_bar::install(); install(); });
 }
 }

@@ -66,20 +66,31 @@ def main():
     parser.add_argument('--mesa-include', type=Path, required=True)
     parser.add_argument('--fixture-air', type=Path, required=True)
     parser.add_argument('--function-constant-air', type=Path, required=True)
+    parser.add_argument('--scanout-air', type=Path, required=True, help='Matching public scanout_convert.ll assembled as AIR; handoff stays disabled on houji')
     parser.add_argument('--turnip', type=Path, required=True, help='Matching local libvulkan_freedreno.dylib')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--target-dir', type=Path, help='Optional reusable Cargo build directory')
     parser.add_argument('--primelist', type=Path, help='OS-specific absolute .metallib paths to embed for idle shader priming')
     parser.add_argument('--toolchain', default='1.98.0')
     parser.add_argument('--gpu-stage-trace', action='store_true',
-                        help='backboardd only: bounded command timeline, max 16 MiB / 360 s; default off')
+                        help='Diagnostic command/pass timeline; default off. Use a bounded recovery trial')
+    parser.add_argument('--no-gpu-logging', action='store_true',
+                        help='Disable GPU journals, message sinks, traces, samplers and diagnostic workers')
     parser.add_argument('--gpu-cpu-profile', action='store_true',
                         help='Diagnostic only: sample the compositor thread for 90 s; perturbs timing; default off')
     parser.add_argument('--turnip-render-mode', choices=['sysmem', 'autotune'], default='sysmem',
                         help='Explicit comparison: allow Turnip to select GMEM; concurrent binning stays off')
+    parser.add_argument('--sample-policy', choices=['single', 'requested'], default='single',
+                        help='Single reduces MSAA work; requested retains application sample counts for comparison')
+    parser.add_argument('--pixel-probe', action='store_true',
+                        help='Diagnostic: run small known-pixel cases once before backboardd rendering; use a bounded recovery trial')
     parser.add_argument('--diagnostic-fresh-pattern', choices=['green'],
                         help='Diagnostic only: mark fresh optimized RGBA8/BGRA8 private texture patterns; not a rendering fix')
     args = parser.parse_args()
+    if args.no_gpu_logging and args.gpu_stage_trace:
+        parser.error('--no-gpu-logging and --gpu-stage-trace are mutually exclusive')
+    if args.gpu_cpu_profile or args.diagnostic_fresh_pattern or args.pixel_probe:
+        parser.error('The full replacement omits the old CPU sampler and fresh-pattern/pixel-probe hooks; use tools/check-metal-pixels.py for authored pixels')
     if args.gpu_cpu_profile and not args.gpu_stage_trace:
         parser.error('--gpu-cpu-profile requires --gpu-stage-trace for uptime correlation')
     runtime, out = args.runtime.resolve(), args.output.resolve()
@@ -92,7 +103,7 @@ def main():
     if source_id != lock['metal_frontend']['runtime_id']:
         parser.error('runtime sources differ from the locked identity; review and update the source lock first')
     runtime_id = runtime_variant_id(source_id, args.diagnostic_fresh_pattern)
-    for path in [args.fixture_air, args.function_constant_air, args.turnip,
+    for path in [args.fixture_air, args.function_constant_air, args.scanout_air, args.turnip,
                  args.mesa_include / 'vulkan/vulkan_core.h']:
         if not path.is_file():
             parser.error('missing local input: ' + str(path))
@@ -122,7 +133,7 @@ def main():
     shutil.copyfile(ROOT / 'graphics/bridge/Cargo.lock', bridge / 'Cargo.lock')
     env = dict(os.environ, CARGO_INCREMENTAL='0', IPHONEOS_DEPLOYMENT_TARGET='16.0',
                NMB_RUNTIME_ID=runtime_id, NMB_FIXTURE_AIR=str(args.fixture_air.resolve()),
-               NMB_FC_AIR=str(args.function_constant_air.resolve()))
+               NMB_FC_AIR=str(args.function_constant_air.resolve()), NMB_SCANOUT_AIR=str(args.scanout_air.resolve()))
     env.pop('DYLD_LIBRARY_PATH', None)
     # Do not inherit an ambient diagnostic setting. Rust tracks option_env!
     # in its dependency fingerprint, so a reused target directory rebuilds it.
@@ -134,7 +145,10 @@ def main():
     common = ['-target', 'arm64-apple-ios16.0', '-isysroot', sdk, '-O2',
               '-DHOUJI_TURNIP_RENDER_AUTOTUNE=' + str(int(args.turnip_render_mode == 'autotune')),
               '-DHOUJI_GPU_STAGE_TRACE=' + str(int(args.gpu_stage_trace)),
+              '-DHOUJI_METAL_QUIET=' + str(int(args.no_gpu_logging)),
               '-DHOUJI_GPU_CPU_PROFILE=' + str(int(args.gpu_cpu_profile)),
+              '-DHOUJI_METAL_SINGLE_SAMPLE=' + str(int(args.sample_policy == 'single')),
+              '-DHOUJI_METAL_PIXEL_PROBE=' + str(int(args.pixel_probe)),
               '-I', str(ROOT / 'graphics/include'), '-I', str(args.mesa_include.resolve())]
     pm4 = ['xcrun', 'clang', *common, '-c', str(ROOT / 'graphics/include/AdrenoPM4.c'), '-o', str(out / 'AdrenoPM4.o')]
     archive = target / 'aarch64-apple-ios/release/libnative_metal_bridge.a'
@@ -160,20 +174,28 @@ def main():
     (bundle / 'Info.plist').write_bytes(plistlib.dumps(info))
     shutil.copyfile(args.turnip, bundle / 'libvulkan_freedreno.dylib')
     extract_debug_symbols(bundle, out)
+    shutil.copyfile(bundle / 'NativeAdrenoMetal', out / 'NativeAdrenoMetal.unstripped')
+    subprocess.run(['strip', '-x', str(bundle / 'libvulkan_freedreno.dylib')], check=True)
+    subprocess.run(['codesign', '--force', '--sign', '-', '--pagesize', '4096', str(bundle / 'libvulkan_freedreno.dylib')], check=True)
     subprocess.run(['strip', '-x', str(bundle / 'NativeAdrenoMetal')], check=True)
-    subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none', str(bundle)], check=True)
+    subprocess.run(['codesign', '--force', '--sign', '-', '--pagesize', '4096', '--timestamp=none', str(bundle)], check=True)
     subprocess.run(['codesign', '--verify', '--strict', str(bundle)], check=True)
     report = dict(status='built-not-hardware-qualified', runtime_revision=origin['revision'],
                   runtime_id=runtime_id, runtime_source_id=source_id,
                   diagnostic_fresh_pattern=args.diagnostic_fresh_pattern,
                   gpu_cpu_profile=args.gpu_cpu_profile,
+                  sample_policy=args.sample_policy,
+                  pixel_probe=args.pixel_probe,
                   runtime_archive_sha256=digest(archive),
                   plugin_sha256=digest(bundle / 'NativeAdrenoMetal'),
-                  turnip_sha256=digest(args.turnip), fixture_air_sha256=digest(args.fixture_air),
+                  turnip_input_sha256=digest(args.turnip), turnip_sha256=digest(bundle / 'libvulkan_freedreno.dylib'), fixture_air_sha256=digest(args.fixture_air),
                   function_constant_air_sha256=digest(args.function_constant_air),
                   device_accessed=False, installed=False)
-    report['gpu_stage_trace'] = dict(enabled=args.gpu_stage_trace, process='backboardd',
-                                    maximum_bytes=16*1024**2, maximum_seconds=360)
+    report['gpu_stage_trace'] = dict(enabled=args.gpu_stage_trace, source='new upstream diagnostic path', kernel_frame_transport=False)
+    report['gpu_logging'] = dict(enabled=not args.no_gpu_logging,
+                                 journals=not args.no_gpu_logging, message_sink=not args.no_gpu_logging,
+                                 diagnostic_workers=not args.no_gpu_logging)
+    report['full_replacement'] = dict(frontend=lock['metal_frontend']['reference_revision'], kernel_abi=1, priority_method=False, owned_coherent=False, rust_lto='fat', rust_codegen_units=1, idle_priming_default=False)
     report['client_allowlist'] = dict(file=client_list.name, processes=len(clients), sha256=digest(client_list),
                                     requires_matching_kernel_client_windows=True)
     report['turnip_policy'] = dict(render_mode=args.turnip_render_mode,

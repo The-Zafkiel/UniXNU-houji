@@ -10,7 +10,9 @@
 #include <stdint.h>
 #include <unistd.h>
 #include "GpuScanoutPresenter.h"
-#include "../NativeMobileDisplay/NativeGOPWire.h"
+
+extern "C" void NBWaitInFlight(uint64_t beforeUs) __attribute__((weak_import));
+extern "C" void NBTraceSwap(uint64_t offered,uint64_t copied,uint64_t completed,uint32_t sequence,uint32_t result) __attribute__((weak_import));
 
 namespace gpuscanout {
 
@@ -78,10 +80,18 @@ public:
             return false;
         }
         const size_t page = (size_t)getpagesize();
+        {   // measurement: the second half of the run copies half the rows
+            static uint64_t first = 0;
+            const uint64_t nowS = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000000ull;
+            if (!first) first = nowS;
+            (void)first; gpupresent::gHalfRows.store(false, std::memory_order_relaxed);
+        }
         note(0x6730);   // a frame was offered
+        const uint64_t offeredUs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
+        if (NBWaitInFlight) NBWaitInFlight(offeredUs);
         const uint64_t began = mach_absolute_time();
         const gpupresent::Result r = presenter_->present({(const void *)(uintptr_t)swap.address, (size_t)((swap.bytes + page - 1) & ~(page - 1)),
-                                                          (size_t)swap.stride, swap.width, swap.height});
+                                                          (size_t)swap.stride, swap.width, swap.height, swap.reserved, swap.format});
         {
             static mach_timebase_info_data_t base;
             if (!base.denom) mach_timebase_info(&base);
@@ -89,10 +99,12 @@ public:
             stats_->totalMs += stats_->lastMs;
         }
         stats_->lastResult = (int)r;
-        if (r == gpupresent::kOk && stats_->verified < 4) verify(swap);
+        if (r == gpupresent::kOk && swap.format == NGP_BGRX8888 && stats_->verified < 4) verify(swap);
         note(0x6731);   // the GPU copy returned
+        const uint64_t copiedUs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
         NGPComplete done = {swap.sequence, r == gpupresent::kOk ? 0u : 0xe00002bcu /* kIOReturnError */, 0};
         const int completed = transport_.call(transport_.context, NGP_METHOD_COMPLETE_SWAP, &done, sizeof done, nullptr, 0);
+        if (NBTraceSwap) NBTraceSwap(offeredUs, copiedUs, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000, (uint32_t)swap.sequence, (uint32_t)r);
         if (completed) {++stats_->failures; stats_->error = completed; return false;}
         if (r == gpupresent::kOk) ++stats_->frames; else ++stats_->failures;
         return true;

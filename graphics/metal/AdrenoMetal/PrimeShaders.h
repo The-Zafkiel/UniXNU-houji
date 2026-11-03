@@ -4,10 +4,12 @@
 // Each kernel function becomes a compute pipeline; each vertex function becomes a render pipeline with the library's fragment function of
 // the same stem (`_vert_` -> `_frag_`, or a fragment-less pipeline) and one BGRA8 attachment. Pipelines a caller makes with other constants
 // or attachments still compile then, but their functions' modules are decoded and the translator has seen every function once.
-// State in the cache directory: prime-done lists finished libraries (path, size, mtime, runtime/driver build), prime-bad the functions that ended the process
-// (prime-current names the function being compiled; a start that finds it moves it to prime-bad), prime.log one line per library.
-// prime-fn also checkpoints successful functions inside unfinished libraries (AdrenoMetal 1d19b759).
-// Both checkpoints include the library identity and runtime/driver build; memory pressure remains retryable.
+// State in the cache directory: prime-done lists finished libraries (path, size, mtime), prime-bad the functions that ended the process
+// (prime-current names the function being compiled; a start that finds it moves it to prime-bad), prime.log one line per library, and
+// prime-fn the functions finished inside the libraries not finished yet (path, name and the build that made them).
+// A library listed as finished is never read again, and a function listed in prime-fn is not compiled again, so a restart resumes where
+// the previous run stopped even inside a library with thousands of functions (the one that held priming at 162 of 280 libraries for
+// every boot: each boot ended before it did and began it again).
 #pragma once
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -25,10 +27,8 @@
 #include <set>
 #include <string>
 #include <vector>
-#include <algorithm>
 
-#include "NativeBridgeMetalFrontend.h"
-namespace prime {static uint64_t waitForQuiet();}
+extern "C" unsigned native_bridge_metal_recent_commits(uint64_t windowUs);
 
 @interface NSObject (NBPrimeZeroConstants)
 - (id<MTLFunction>)nb_newFunctionWithZeroConstants:(NSString *)name;
@@ -37,9 +37,10 @@ namespace prime {static uint64_t waitForQuiet();}
 // Priming's progress for the telemetry table (the PR row): what the thread does (1 a pipeline compiles, 2 it waits for the desktop to
 // settle, 3 it opens a library and its functions), libraries done of the list, pipelines made, and the most command buffers the last wait
 // saw in 250 ms.
-extern "C" {uint32_t native_prime_compiling, native_prime_libraries_done, native_prime_libraries_total, native_prime_made, native_prime_rate,
-                       native_prime_functions_resumed;}
+extern "C" {volatile uint32_t native_prime_compiling, native_prime_libraries_done, native_prime_libraries_total, native_prime_made, native_prime_rate,
+               native_prime_functions_resumed;}
 
+extern "C" void native_bridge_metal_quiet_problems(bool);
 namespace prime {
 static const char *const kRoots[] = {"/System/Library", "/Applications", "/System/Cryptexes/OS/System/Library"};
 
@@ -79,26 +80,7 @@ static void appendLine(const std::string &path, const std::string &line) {
 static void writeCurrent(const std::string &path, const std::string &line) {
     if (FILE *f = fopen(path.c_str(), "w")) {fprintf(f, "%s\n", line.c_str()); fflush(f); fsync(fileno(f)); fclose(f);}
 }
-static std::string libraryKey(const std::string &path,const struct stat &st,const std::string &build) {
-    return path + "\t" + std::to_string((long long)st.st_size) + "\t" +
-        std::to_string((long long)st.st_mtimespec.tv_sec) + "." + std::to_string((long long)st.st_mtimespec.tv_nsec) + "\t" + build + "-prime-v2";
-}
-static void checkpointFunction(const std::string &path,const std::string &key,bool made,bool pressure) {
-    if (made && !pressure) appendLine(path,key);
-}
 static uint64_t nowMs() {return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000;}
-
-// A bounded development boot may not finish the whole OS. Populate compositor
-// libraries before camera/photo filters so the persistent pass helps UI first.
-static void prioritize(std::vector<std::string> &paths) {
-    auto rank=[](const std::string &path){
-        if(path.find("/QuartzCore.framework/")!=std::string::npos)return 0;
-        if(path.find("/RenderBox.framework/")!=std::string::npos ||
-           path.find("/CoreUI.framework/")!=std::string::npos)return 1;
-        return 2;
-    };
-    std::stable_sort(paths.begin(),paths.end(),[&](const auto &a,const auto &b){return rank(a)<rank(b);});
-}
 
 // The libraries: first the paths of the list file beside the bundle (NativeAdrenoMetal.primelist, every .metallib of the OS image, one
 // absolute path per line), because the render server's sandbox refuses to list most directories (a scan alone found 8 of 166). Only
@@ -114,7 +96,6 @@ static std::vector<std::string> libraries(const std::string &listPath, std::stri
     const char *source = listPath.empty() ? "(none)" : listPath.c_str();
     if (list.empty()) {list = embeddedLines(); source = "embedded";}
     for (const std::string &path : list) {
-        waitForQuiet();
         ++lines;
         struct stat st = {};
         if (path.empty() || path[0] != '/') continue;
@@ -125,41 +106,40 @@ static std::vector<std::string> libraries(const std::string &listPath, std::stri
     snprintf(line, sizeof line, "list %s lines=%u kept=%zu stat-failed=%u errno=%d", source, lines,
              found.size(), failed, lastErrno);
     note = line;
-    if (!found.empty()) {prioritize(found); return found;}
     for (const char *root : kRoots) {
-        waitForQuiet();
+        if (!found.empty()) break;
         char *paths[] = {const_cast<char *>(root), nullptr};
         FTS *fts = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV, nullptr);
         if (!fts) continue;
         while (FTSENT *e = fts_read(fts)) {
-            waitForQuiet();
             if (e->fts_info != FTS_F || e->fts_namelen < 9 || strcmp(e->fts_name + e->fts_namelen - 9, ".metallib")) continue;
             if (seen.insert({e->fts_statp->st_dev, e->fts_statp->st_ino}).second) found.push_back(e->fts_path);
         }
         fts_close(fts);
     }
-    prioritize(found);
     return found;
 }
 
-// Background priming yields throughout animation or pending GPU work, then waits
-// for two quiet seconds. Unlike the upstream escape, it never forces a compile
-// after ten busy seconds. Discovery and library parsing use the same gate.
+// Waits until the render server is not animating: more than 4 command buffers in 250 ms (16 fps; an idle desktop redraws at about 12 fps)
+// means frames are being drawn, and a pipeline compile then competes with them for the CPU and the driver (int-244: priming during the
+// scripted swipes raised the median frame interval from 19 to 30 ms). A higher bar let compiles in once they had slowed the frames under
+// it (int-250: 12 per 250 ms, 460 pipelines made during the swipes at a 48 ms median). With a fixed 120 Hz vsync the idle desktop draws 6
+// per 250 ms (i516), so the bar is 8: still under any animation, which draws 15 to 30. A desktop that never drops under it still gets one
+// pipeline every 10 s (i513-i515: priming sat at 15/162 for the whole run without making a pipeline). Returns the milliseconds it waited.
 static uint64_t waitForQuiet() {
     const uint64_t began = nowMs();
     uint64_t quietSince = 0;
-    bool busy = false, quiet = false;
-    __atomic_store_n(&native_prime_rate,0u,__ATOMIC_RELAXED);
+    bool busy = false;
+    native_prime_rate = 0;
     for (;;) {
         const uint64_t now = nowMs();
-        const unsigned commits=native_bridge_metal_recent_commits(250000);
-        if(commits>__atomic_load_n(&native_prime_rate,__ATOMIC_RELAXED))
-            __atomic_store_n(&native_prime_rate,commits,__ATOMIC_RELAXED);
-        if (native_bridge_metal_pending_commits() || commits > 8) {
-            __atomic_store_n(&native_prime_compiling,2u,__ATOMIC_RELAXED);
-            busy = true; quiet = false;
-        } else if (!busy) return 0;
-        else if (!quiet) {quiet = true; quietSince = now;}
+        const unsigned commits = native_bridge_metal_recent_commits(250000);
+        if (commits > native_prime_rate) native_prime_rate = commits;
+        if (now - began >= 10000) return now - began;
+        if (commits > 8) {busy = true; quietSince = 0; native_prime_compiling = 2;}
+        else if (!busy) return 0;
+        else if (!quietSince) quietSince = now;
+        // After animation, two seconds without it before the next compile, so a pause between two swipes does not let one in.
         else if (now - quietSince >= 2000) return now - began;
         usleep(100000);
     }
@@ -204,7 +184,6 @@ static bool linkedKernel(id<MTLDevice> device, id<MTLLibrary> lib, id<MTLFunctio
     NSMutableArray<id<MTLFunction>> *linked = [NSMutableArray array];
     NSMutableSet<NSString *> *symbols = [NSMutableSet set];
     for (unsigned round = 0; round < 16; ++round) {
-        waitForQuiet();
         NSString *why = (*error).localizedDescription;
         NSRange at = [why rangeOfString:@"LinkedFunction { symbol: \""];
         if (at.location == NSNotFound) return false;
@@ -229,18 +208,9 @@ static bool linkedKernel(id<MTLDevice> device, id<MTLLibrary> lib, id<MTLFunctio
 }
 
 // One library: every function it names, in its order; returns the log line.
-static bool memoryPressure(const std::string &message) {
-    return message.find("OutOfMemory") != std::string::npos ||
-           message.find("OUT_OF_DEVICE_MEMORY") != std::string::npos ||
-           message.find("OUT_OF_HOST_MEMORY") != std::string::npos ||
-           message.find("out of memory") != std::string::npos;
-}
-
-static std::string library(id<MTLDevice> device, const std::string &path, const std::string &current,
-                           const std::set<std::string> &bad, bool &completed, bool &pressure,
-                           const std::string &functionsPath,const std::set<std::string> &functionsDone,const std::string &identity) {
-    completed = false;
-    unsigned kernels = 0, renders = 0, made = 0, refused = 0, skipped = 0, zeroed = 0, linkedMade = 0, halfMade = 0, resumed = 0;
+static std::string library(id<MTLDevice> device, const std::string &path, const std::string &current, const std::set<std::string> &bad,
+                           const std::string &functionsPath, const std::set<std::string> &functionsDone, const std::string &build) {
+    unsigned kernels = 0, renders = 0, made = 0, refused = 0, skipped = 0, zeroed = 0, linkedMade = 0, halfMade = 0;
     uint64_t waited = 0;
     std::string firstRefusal;   // the first refused function and why, so the log tells translator gaps from unspecialized constants
     const uint64_t began = nowMs();
@@ -248,30 +218,26 @@ static std::string library(id<MTLDevice> device, const std::string &path, const 
         NSError *error = nil;
         // Reading and parsing a library is work too: not during an animation either.
         waited += waitForQuiet();
-        __atomic_store_n(&native_prime_compiling,(uint32_t)(3),__ATOMIC_RELAXED);
+        native_prime_compiling = 3;
         id<MTLLibrary> lib = [device newLibraryWithURL:[NSURL fileURLWithPath:@(path.c_str())] error:&error];
-        __atomic_store_n(&native_prime_compiling,(uint32_t)(0),__ATOMIC_RELAXED);
-        if (!lib) {
-            const char *why = error.localizedDescription.UTF8String ?: "no error";
-            pressure = memoryPressure(why);
-            return path + " library refused: " + why;
-        }
+        native_prime_compiling = 0;
+        if (!lib) return path + " library refused: " + (error ? error.localizedDescription.UTF8String : "no error");
         NSArray<NSString *> *names = lib.functionNames;
         for (NSString *name in names) {
             @autoreleasepool {
-                waited += waitForQuiet();
-                const std::string key = identity + "\t" + name.UTF8String;
-                __atomic_store_n(&native_prime_compiling,(uint32_t)(3),__ATOMIC_RELAXED);
+                const std::string key = path + "\t" + name.UTF8String;
+                const std::string doneKey = key + "\t" + build;
+                native_prime_compiling = 3;
                 if (bad.count(key)) {++skipped; continue;}
-                if (functionsDone.count(key)) {++resumed;__atomic_fetch_add(&native_prime_functions_resumed,1u,__ATOMIC_RELAXED);continue;}
+                if (functionsDone.count(doneKey)) {native_prime_functions_resumed = native_prime_functions_resumed + 1; continue;}
                 id<MTLFunction> function = [lib newFunctionWithName:name];
                 if (!function) {++refused; continue;}
                 const MTLFunctionType type = function.functionType;
                 if (type != MTLFunctionTypeKernel && type != MTLFunctionTypeVertex) continue;
                 waited += waitForQuiet();
                 writeCurrent(current, key);
-                __atomic_store_n(&native_prime_compiling,(uint32_t)(1),__ATOMIC_RELAXED);
-                bool ok = false, variantReady = true;
+                native_prime_compiling = 1;
+                bool ok = false;
                 @try {
                     if (type == MTLFunctionTypeKernel) {
                         ++kernels;
@@ -281,7 +247,7 @@ static std::string library(id<MTLDevice> device, const std::string &path, const 
                         if (!ok && [error.localizedDescription containsString:@"FunctionConstant"] &&
                             [lib respondsToSelector:@selector(nb_newFunctionWithZeroConstants:)]) {
                             id<MTLFunction> zero = [(NSObject *)lib nb_newFunctionWithZeroConstants:name];
-                            if (zero) {function = zero; error = nil; ok = [device newComputePipelineStateWithFunction:function error:&error] != nil; if (ok) ++zeroed;}
+                            if (zero) {error = nil; ok = [device newComputePipelineStateWithFunction:zero error:&error] != nil; if (ok) ++zeroed;}
                         }
                         if (!ok && [error.localizedDescription containsString:@"LinkedFunction"]) {
                             ok = linkedKernel(device, lib, function, &error);
@@ -304,37 +270,26 @@ static std::string library(id<MTLDevice> device, const std::string &path, const 
                             }
                         }
                         ok = [device newRenderPipelineStateWithDescriptor:d error:&error] != nil;
+                        // The render server's framebuffer is half-float (RGhA) on this board: its pipelines draw into RGBA16Float, a state
+                        // of its own to Turnip, so the same pair is made for it too.
                         if (ok) {
-                            // RGhA uses a distinct driver pipeline. Yield before this variant too.
-                            waited += waitForQuiet();
-                            __atomic_store_n(&native_prime_compiling,1u,__ATOMIC_RELAXED);
                             d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
-                            NSError *halfError = nil;
-                            variantReady = [device newRenderPipelineStateWithDescriptor:d error:&halfError] != nil;
-                            if (variantReady) ++halfMade;
-                            else if (memoryPressure(halfError.localizedDescription.UTF8String ?: "")) pressure = true;
+                            NSError *half = nil;
+                            if ([device newRenderPipelineStateWithDescriptor:d error:&half]) ++halfMade;
                         }
                     }
                 } @catch (NSException *exception) {
                     ok = false;
                 }
-                __atomic_store_n(&native_prime_compiling,(uint32_t)(0),__ATOMIC_RELAXED);
-                // Clear after each finished function: an unrelated later exit must not blacklist it.
-                unlink(current.c_str());
-                checkpointFunction(functionsPath,key,ok && variantReady,pressure);
+                native_prime_compiling = 0;
+                appendLine(functionsPath, doneKey);
                 ok ? ++made : ++refused;
-                if (ok) __atomic_fetch_add(&native_prime_made,1u,__ATOMIC_RELAXED);
+                if (ok) native_prime_made = native_prime_made + 1;
                 if (!ok && firstRefusal.empty()) {
                     NSString *why = error.localizedDescription ?: @"no error";
                     firstRefusal = std::string(" first-refused=") + name.UTF8String + ": " + why.UTF8String;
                     if (firstRefusal.size() > 220) firstRefusal.resize(220);
                     for (char &c : firstRefusal) if (c == '\n' || c == '\t') c = ' ';
-                }
-                if (pressure || (!ok && memoryPressure(error.localizedDescription.UTF8String ?: ""))) {
-                    // OOM is transient. Stop this pass, release the library and
-                    // leave it unfinished so the next boot can retry it.
-                    pressure = true;
-                    break;
                 }
                 error = nil;
                 // Low priority already; a short pause between pipelines keeps the render server's own work ahead.
@@ -342,26 +297,27 @@ static std::string library(id<MTLDevice> device, const std::string &path, const 
             }
         }
     }
-    completed = !pressure;
     unlink(current.c_str());
-    char line[240];
-    snprintf(line, sizeof line, " kernels=%u renders=%u made=%u half=%u resumed=%u zeroed=%u linked=%u refused=%u skipped=%u ms=%llu waited=%llu", kernels, renders,
-             made, halfMade, resumed, zeroed, linkedMade, refused, skipped, (unsigned long long)(nowMs() - began), (unsigned long long)waited);
+    char line[200];
+    snprintf(line, sizeof line, " kernels=%u renders=%u made=%u half=%u zeroed=%u linked=%u refused=%u skipped=%u ms=%llu waited=%llu", kernels, renders,
+             made, halfMade, zeroed, linkedMade, refused, skipped, (unsigned long long)(nowMs() - began), (unsigned long long)waited);
     return path + line + firstRefusal;
 }
 
 // The thread: waits for the desktop to settle, then works through the libraries not finished yet.
 static void run(id<MTLDevice> device, std::string root, unsigned delaySeconds, const std::string &listPath) {
     pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
+    native_bridge_metal_quiet_problems(true);
     while (root.size() > 1 && root.back() == '/') root.pop_back();
     const std::string donePath = root + "/prime-done", badPath = root + "/prime-bad", current = root + "/prime-current",
-                      logPath = root + "/prime.log", functionsPath = root + "/prime-fn";
+                      logPath = root + "/prime.log";
     // A function was being compiled when the process ended: it is not tried again.
     for (const std::string &line : readLines(current)) appendLine(badPath, line);
     unlink(current.c_str());
     sleep(delaySeconds);
     const std::set<std::string> bad = readLines(badPath);
     std::set<std::string> done = readLines(donePath);
+    const std::string functionsPath = root + "/prime-fn";
     const std::set<std::string> functionsDone = readLines(functionsPath);
     const uint64_t began = nowMs();
     unsigned libs = 0, finished = 0;
@@ -369,25 +325,22 @@ static void run(id<MTLDevice> device, std::string root, unsigned delaySeconds, c
     const std::vector<std::string> paths = libraries(listPath, note);
     const std::string build = buildId();
     appendLine(logPath, note + " build=" + build);
-    __atomic_store_n(&native_prime_libraries_total,(uint32_t)((uint32_t)paths.size()),__ATOMIC_RELAXED);
+    native_prime_libraries_total = (uint32_t)paths.size();
     for (const std::string &path : paths) {
         ++libs;
-        __atomic_store_n(&native_prime_libraries_done,(uint32_t)(finished),__ATOMIC_RELAXED);
+        native_prime_libraries_done = finished;
         struct stat st = {};
         if (stat(path.c_str(), &st) != 0) continue;
         // The runtime's and Turnip's builds end the id: a newer one primes every library again (buildId()).
-        const std::string id = libraryKey(path,st,build);
+        const std::string id = path + "\t" + std::to_string((long long)st.st_size) + "\t" + std::to_string((long long)st.st_mtimespec.tv_sec) + "\t" + build;
         if (done.count(id)) {++finished; continue;}
-        bool completed = false, pressure = false;
-        appendLine(logPath, library(device, path, current, bad, completed, pressure, functionsPath, functionsDone, id));
-        if (pressure) {appendLine(logPath, "paused: memory pressure; unfinished library will retry next boot"); break;}
-        if (!completed) continue;
+        appendLine(logPath, library(device, path, current, bad, functionsPath, functionsDone, build));
         appendLine(donePath, id);
         done.insert(id);
         ++finished;
     }
-    __atomic_store_n(&native_prime_libraries_done,(uint32_t)(finished),__ATOMIC_RELAXED);
-    __atomic_store_n(&native_prime_compiling,(uint32_t)(0),__ATOMIC_RELAXED);
+    native_prime_libraries_done = finished;
+    native_prime_compiling = 0;
     char line[120];
     snprintf(line, sizeof line, "pass libraries=%u finished=%u ms=%llu", libs, finished, (unsigned long long)(nowMs() - began));
     appendLine(logPath, line);

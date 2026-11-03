@@ -96,9 +96,6 @@ mod families;
 pub use execution::{ExecutedPipeline, Execution};
 mod exit_guard;
 pub use exit_guard::process_exiting;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[doc(hidden)]
-pub use exit_guard::thread_qos_statistics;
 #[doc(hidden)]
 pub use exit_guard::{registrations as exit_registrations, Registrations as ExitRegistrations};
 mod executed_commands;
@@ -120,10 +117,8 @@ mod gpu_time;
 mod heap;
 mod heap_sets;
 mod host_aliases;
-mod host_backing;
 mod host_bytes;
 mod host_memory;
-mod host_ram;
 #[cfg(unix)]
 mod host_residency;
 #[cfg(unix)]
@@ -213,12 +208,6 @@ mod stencil_copy;
 mod storage_placeholder;
 mod tessellation;
 mod texture;
-/// Diagnostic initial-pattern marker: enabled flag and planned texture count.
-/// Counts are cached and do not read or synchronize with the GPU.
-#[doc(hidden)]
-pub fn houji_pattern_probe_statistics() -> [u64; 2] {
-    texture::houji_pattern_probe_statistics()
-}
 mod texture_descriptor;
 mod tile_pass;
 mod tracker;
@@ -231,7 +220,6 @@ mod values;
 mod versioned;
 mod view_plan;
 mod visibility;
-mod warm;
 mod word_fill;
 mod work_counts;
 mod wrapped_buffer;
@@ -303,10 +291,8 @@ pub use function_table::{
 };
 pub use gpu_time::host_time;
 pub use heap::{Heap, HeapDescriptor, HeapProblem, HeapType, SizeAndAlign};
-pub use host_backing::HostBacking;
 pub use host_bytes::HostBytes;
-pub use host_memory::{Deallocator, HostMemory, ImportGate, ImportRequest, KeepAlive, RunResolver};
-pub use host_ram::{HostRam, HostRamUse};
+pub use host_memory::{Deallocator, HostMemory, ImportGate, ImportRequest, KeepAlive};
 pub use indirect_command_buffer::{
     EncodedComputeCommand, EncodedRenderCommand, IndirectBufferBinding, IndirectCommand,
     IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandBufferProblem,
@@ -335,7 +321,7 @@ pub use rate_map::{RasterizationRateMap, RateMapProblem};
 pub use rate_mapped_pass::RegionRefusal;
 pub use rebind::RebindProblem;
 #[doc(hidden)]
-pub use recorder::CommandsRecorded;
+pub use recorder::CommandsReplayed;
 pub use render::{DrawProblem, RenderCommandEncoder, ResolveTarget};
 pub use render_pass::{
     Attachment, RenderPassColorAttachmentDescriptor, RenderPassDepthAttachmentDescriptor,
@@ -351,6 +337,7 @@ pub use render_values::{
 pub use resource::{ObjectId, ResourceRef};
 pub use resource_ids::{IdPlacement, ResourceId, ResourceIdKind};
 pub use sampler::{sampler_border_color, SamplerState, SamplerStateOptions};
+pub use creation::{allocation_sites, AllocationSite};
 pub use shader_cache::{
     ShaderCacheOptions, ShaderCacheStatistics, DEFAULT_CAPACITY, DEFAULT_MEMORY_CAPACITY,
 };
@@ -366,7 +353,6 @@ pub use values::{
 };
 pub use view_plan::ViewProblem;
 pub use visibility::{VisibilityProblem, VisibilityResultMode};
-pub use warm::{PipelineRecord, WarmStatistics};
 pub use work_counts::{CopySite, MemoryFrees, WorkCounts};
 pub use wrapped_buffer::{VkBufferMemory, WrappedBufferProblem};
 pub use ycbcr::{IoSurfaceYCbCr, SurfaceYCbCrMatrix};

@@ -1,0 +1,23 @@
+diff --git a/base/xnu-deps/host/bin/xnu-clang b/base/xnu-deps/host/bin/xnu-clang
+index 6ea04a7..3a53d37 100755
+--- a/base/xnu-deps/host/bin/xnu-clang
++++ b/base/xnu-deps/host/bin/xnu-clang
+@@ -15,4 +15,5 @@ for a in "$@"; do
+   esac
+ done
+ exec /usr/bin/$drv -include "$HB/../../hostinc/xnu_clang_compat.h" -target arm64-apple-ios${XNU_SDK_VERSION:-16.5} --ld-path="$HB/ld64" \
++  -isystem "$(/usr/bin/clang -print-resource-dir)/include" \
+   -w "${extra[@]}" "${args[@]}"
+diff --git a/base/xnu-deps/setup.sh b/base/xnu-deps/setup.sh
+index cba1770..4f89b82 100755
+--- a/base/xnu-deps/setup.sh
++++ b/base/xnu-deps/setup.sh
+@@ -232,7 +232,7 @@ stage2() {
+ 		log "building libfirehose_kernel.a"
+ 		mkdir -p build/firehose
+ 		xnu-clang -arch ${XNU_ARCH:-arm64} -c -Os -mkernel -nostdinc -fno-builtin \
+-			-DKERNEL=1 -DKERNEL_PRIVATE=1 -DXNU_KERNEL_PRIVATE=0 -DPRIVATE=1 -D__DARWIN_64_BIT_INO_T=1 \
++			-DKERNEL=1 -DKERNEL_PRIVATE=1 -DXNU_KERNEL_PRIVATE=1 -DPRIVATE=1 -D__DARWIN_64_BIT_INO_T=1 \
+ 			-DDISPATCH_USE_DTRACE=0 -DOS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 \
+ 			-DOS_ATOMIC_CONFIG_STARVATION_FREE_ONLY=0 -DOS_FIREHOSE_SPI=1 -DARM64_BOARD_CONFIG_BCM2837 \
+ 			-Ilibdispatch -Ilibdispatch/src -Ilibdispatch/src/firehose \

@@ -4,9 +4,9 @@
   "validated_build": "r222",
   "ios26_preparation": {
     "target_manifest": "targets/ios26.json",
-    "status": "preparation",
+    "status": "uefi-first-entry-blocked-offline-work",
     "hardware_boot_verified": false,
-    "existing_components": "Retained iOS16 baseline; not yet rebased to XNU12377",
+    "existing_components": "iOS16 baseline retained separately; explicit iOS26 sources below",
     "reference_repository": "https://github.com/superboyyy/hakios-arm64e-dada",
     "reference_revision": "f1ae906fcc43ba8f763663257724ba938fb820ab"
   },
@@ -462,5 +462,144 @@
   "gpu_host_import_wait": {
     "basis": "r291 animation samples and actual special BoImport branch in NativeAdrenoPublish.cpp",
     "scope": "Route host imports through the existing zero-timeout readiness gate and mutation reservation, sleeping outside the issuer lock. Keep original board quiescence/VM proof once ready, caller task, pinning and reply-on-success. Includes imports in existing per-method latency records; never retries a dispatched import. Host dispatch scheduler tests pass; r292 observed 1264 timed imports and user reported slight animation improvement; uncontrolled workload, no FPS qualification."
+  },
+  "ios26": {
+    "target_manifest": "targets/ios26.json",
+    "status": "uefi-first-entry-blocked-offline-work",
+    "hardware_boot_verified": false,
+    "reference": {
+      "repository": "https://github.com/superboyyy/hakios-arm64e-dada",
+      "revision": "f1ae906fcc43ba8f763663257724ba938fb820ab",
+      "kernel_patch": "kernel/xnu-12377.121.6-dada.patch",
+      "kernel_patch_sha256": "f0fe4cbb45feddaaa008af9bd5cc67b65c0ac2216cd78536754c27da55b9c358",
+      "toolchain_patch": "kernel/ios26/patches/reference-toolchain.patch"
+    },
+    "kernel": {
+      "repository": "https://github.com/apple-oss-distributions/xnu.git",
+      "revision": "ac9718fb1af618d5ce8678d0dc6e8a58f252216f",
+      "tag": "xnu-12377.121.6",
+      "patch": "kernel/ios26/patches/local.patch",
+      "reuse": "kernel/ios26/reuse.json",
+      "reuse_patch": "kernel/ios26/patches/reused-drivers.patch",
+      "overlay": "kernel/ios26/overlay",
+      "architecture": "arm64e",
+      "machine": "HOUJI",
+      "CPU_pages": 16384,
+      "darwin_version": "25.6.0",
+      "stock_donor_evidence": {
+        "darwin_version": "25.6.0",
+        "xnu_version": "12377.162.14~4",
+        "note": "Stock cache is an identity reference, not the custom compiled source tag"
+      }
+    },
+    "bootloader": {
+      "baseline_component": "bootloader",
+      "patch": "bootloader/ios26/patches/local.patch",
+      "overlay": "bootloader/ios26/overlay",
+      "boot_args_version": 2,
+      "boot_args_revision": 2,
+      "command_line_bytes": 1024
+    },
+    "verified_on_host": {
+      "kernel_link": true,
+      "kernel_undefined_symbols": 0,
+      "UEFI_build": true,
+      "actual_chained_fixup_parse": true,
+      "standalone_kernel_build": true,
+      "hfs_compile_link": true,
+      "native_UFS_root_entry_linked": true,
+      "actual_entry_parsers": true,
+      "native_present_lease_and_cache_policy": true,
+      "keyboard_statusbar_arm64e_build": true,
+      "ios26_apps_helper_arm64e_build": true,
+      "bridge_and_std_arm64e_build": true
+    },
+    "not_yet_qualified": [
+      "device kernel entry",
+      "full iOS26 root/userland and desktop",
+      "full arm64e Metal frontend/Turnip integration",
+      "GPU submission/presentation and refresh on houji",
+      "multicore scheduler",
+      "brightness/touch/battery and app runtime on iOS26"
+    ],
+    "boot_manager": {
+      "repository": "https://github.com/UniXNU/UniXNU.git",
+      "revision": "79d81c10220caebb15da5737a4eb6c20724cc731",
+      "patch": "bootloader/ios26/manager/local.patch",
+      "scope": "Explicit one-attempt profile; bounded on_return reset; original menu behavior remains default",
+      "overlay": "bootloader/ios26/manager/overlay"
+    },
+    "testing_paused_by_user": true,
+    "latest_device_result": {
+      "kernel_entry_verified": false,
+      "user_entry_verified": false,
+      "result": "User saw only UEFI and a long countdown; stopped device testing. Exact rejection phase unknown; no runtime logs collected."
+    },
+    "rust": {
+      "channel": "nightly-2026-11-03",
+      "compiler": "1.101.0-nightly (1c3a65069 2026-11-02)",
+      "distribution": {
+        "date": "2026-11-03",
+        "manifest_sha256": "6014518e425a9ee9653de9d021ea583b33ea3235df8b84efad2d115b79026257",
+        "components": [
+          {
+            "component": "rustc",
+            "url": "https://static.rust-lang.org/dist/2026-11-03/rustc-nightly-aarch64-apple-darwin.tar.xz",
+            "sha256": "3bf92d3407f503aa300c90e21862b1ea633504bb5cb7325c72f2aff04c79e148"
+          },
+          {
+            "component": "cargo",
+            "url": "https://static.rust-lang.org/dist/2026-11-03/cargo-nightly-aarch64-apple-darwin.tar.xz",
+            "sha256": "98e7f339caf2ec7748ff2fbbd21445e990414b4bb8e505745552b928856e6d14"
+          },
+          {
+            "component": "rust-std",
+            "url": "https://static.rust-lang.org/dist/2026-11-03/rust-std-nightly-aarch64-apple-darwin.tar.xz",
+            "sha256": "b0d5d859c5455b568362895d9f6f7ff11ff1e1321330af1cdef3ac6865ff47e2"
+          },
+          {
+            "component": "rust-src",
+            "url": "https://static.rust-lang.org/dist/2026-11-03/rust-src-nightly.tar.xz",
+            "sha256": "7cf51b9b1323f66a3b767306e578ca81e99b58ed4c3dd4754b33ce61ffd5938f"
+          }
+        ],
+        "system_install": false
+      },
+      "target": "graphics/ios26/arm64e-apple-ios-pauth.json",
+      "target_sha256": "48b434c0b2d3acb6cb2a557dbb03ab12f42d016993d7cdc4473791bd5a8b740e",
+      "pointer_authentication": [
+        "calls",
+        "return-addresses",
+        "auth-traps",
+        "intrinsics"
+      ],
+      "requires_std_rebuild": true,
+      "sha2_assembly": false
+    },
+    "hfs": {
+      "repository": "https://github.com/apple-oss-distributions/hfs.git",
+      "revision": "124b970fd5390f1c2cd6f985478616a04f6eeb1f",
+      "tag": "hfs-715.120.4",
+      "patch": "kernel/ios26/hfs/local.patch",
+      "directories": [
+        "core",
+        "hfs_encodings"
+      ],
+      "target": "bsd/sweet_hfs",
+      "sdk_header_excluded": "TargetConditionals.h"
+    },
+    "graphics_bridge": {
+      "builder": "tools/build-ios26-bridge.py",
+      "cargo_lock": "graphics/ios26/Cargo.lock",
+      "runtime_source_id": "3486f0413be9ea3e231869495c8f5be9",
+      "runtime_id": "bb0835e46522e8edead5296a7714c3b7",
+      "std_rebuilt": true,
+      "machine_code": {
+        "signed_indirect_calls": 4259,
+        "signed_returns": 12791
+      },
+      "hardware_verified": false,
+      "full_frontend_and_turnip_rebuilt": false
+    }
   }
 }

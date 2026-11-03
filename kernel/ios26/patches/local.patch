@@ -1,0 +1,1276 @@
+diff --git a/bsd/conf/Makefile.template b/bsd/conf/Makefile.template
+index c4cbbe9..b644536 100644
+--- a/bsd/conf/Makefile.template
++++ b/bsd/conf/Makefile.template
+@@ -44,6 +44,14 @@ CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE \
+         -Warray-bounds-pointer-arithmetic
+ SFLAGS+= -include meta_features.h
+ 
++ifeq ($(CURRENT_MACHINE_CONFIG),HOUJI)
++HOUJI26_HFS_ROOT = $(SRCROOT)/bsd/sweet_hfs
++HOUJI26_HFS_OBJS = BTree.o BTreeAllocate.o BTreeMiscOps.o BTreeNodeOps.o BTreeNodeReserve.o BTreeScanner.o BTreeTreeOps.o BTreeWrapper.o CatalogUtilities.o FileExtentMapping.o FileIDsServices.o MacOSStubs.o UnicodeWrappers.o VolumeAllocation.o hfs_attrlist.o hfs_btreeio.o hfs_catalog.o hfs_chash.o hfs_cnode.o hfs_cprotect.o hfs_endian.o hfs_extents.o hfs_fsinfo.o hfs_hotfiles.o hfs_journal.o hfs_link.o hfs_lookup.o hfs_notification.o hfs_quota.o hfs_readwrite.o hfs_resize.o hfs_search.o hfs_vfsops.o hfs_vfsutils.o hfs_vnops.o hfs_xattr.o rangelist.o hfs_encodinghint.o hfs_encodings.o sweet_hfs_iokit.o
++$(foreach o,$(HOUJI26_HFS_OBJS),$(eval $(o)_CFLAGS_ADD += -include $(HOUJI26_HFS_ROOT)/sweet_hfs_compat.h -I$(HOUJI26_HFS_ROOT) -I$(HOUJI26_HFS_ROOT)/core))
++hfs_encodings.o_CFLAGS_ADD += -Dhfs_allocated=hfs_encodings_allocated
++hfs_encodinghint.o_CFLAGS_ADD += -Dhfs_allocated=hfs_encodings_allocated
++endif
++
+ #
+ # Directories for mig generated files
+ #
+diff --git a/bsd/conf/files b/bsd/conf/files
+index c99e22e..0853001 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -678,3 +678,47 @@ bsd/skywalk/packet/packet_kern.c		optional skywalk bound-checks
+ bsd/skywalk/packet/pbufpool.c			optional skywalk bound-checks
+ bsd/skywalk/packet/pbufpool_kern.c		optional skywalk bound-checks
+ bsd/dev/cpu_copy_in_cksum_gen.c			optional skywalk bound-checks
++
++bsd/dev/houji_no_ath12k.c standard
++
++# Apple OSS HFS715, pinned in the iOS26 source profile.
++bsd/sweet_hfs/core/BTree.c		optional sweet_hfs
++bsd/sweet_hfs/core/BTreeAllocate.c		optional sweet_hfs
++bsd/sweet_hfs/core/BTreeMiscOps.c		optional sweet_hfs
++bsd/sweet_hfs/core/BTreeNodeOps.c		optional sweet_hfs
++bsd/sweet_hfs/core/BTreeNodeReserve.c		optional sweet_hfs
++bsd/sweet_hfs/core/BTreeScanner.c		optional sweet_hfs
++bsd/sweet_hfs/core/BTreeTreeOps.c		optional sweet_hfs
++bsd/sweet_hfs/core/BTreeWrapper.c		optional sweet_hfs
++bsd/sweet_hfs/core/CatalogUtilities.c		optional sweet_hfs
++bsd/sweet_hfs/core/FileExtentMapping.c		optional sweet_hfs
++bsd/sweet_hfs/core/FileIDsServices.c		optional sweet_hfs
++bsd/sweet_hfs/core/MacOSStubs.c		optional sweet_hfs
++bsd/sweet_hfs/core/UnicodeWrappers.c		optional sweet_hfs
++bsd/sweet_hfs/core/VolumeAllocation.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_attrlist.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_btreeio.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_catalog.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_chash.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_cnode.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_cprotect.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_endian.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_extents.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_fsinfo.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_hotfiles.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_journal.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_link.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_lookup.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_notification.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_quota.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_readwrite.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_resize.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_search.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_vfsops.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_vfsutils.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_vnops.c		optional sweet_hfs
++bsd/sweet_hfs/core/hfs_xattr.c		optional sweet_hfs
++bsd/sweet_hfs/core/rangelist.c		optional sweet_hfs
++bsd/sweet_hfs/hfs_encodings/hfs_encodinghint.c		optional sweet_hfs
++bsd/sweet_hfs/hfs_encodings/hfs_encodings.c		optional sweet_hfs
++bsd/sweet_hfs/sweet_hfs_iokit.c		optional sweet_hfs
+diff --git a/bsd/dev/memdev.c b/bsd/dev/memdev.c
+index 1cc966a..cdfa4b4 100644
+--- a/bsd/dev/memdev.c
++++ b/bsd/dev/memdev.c
+@@ -90,6 +90,10 @@
+ #include <sys/vm.h>
+ #include <sys/uio_internal.h>
+ #include <libkern/libkern.h>
++#include <libkern/OSAtomic.h>
++#include "memdev_range.h"
++#include <sys/memdev_ops.h>
++#include <kern/kalloc.h>
+ 
+ #include <vm/pmap.h>
+ #include <vm/vm_pager_xnu.h>
+@@ -167,6 +171,8 @@ struct mdev {
+ 	int                     mdCDev;         /* Character device number */
+ 	void *          mdbdevb;
+ 	void *          mdcdevb;
++	const struct mdev_ops *mdOps;   /* Trusted nonlinear RAM backend, or NULL. */
++	void *mdContext;
+ } mdev[NB_MAX_MDEVICES];
+ 
+ /* mdFlags */
+@@ -207,6 +213,43 @@ mdevopen(dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
+ 	return 0;
+ }
+ 
++static int
++mdevrw_ops(struct mdev *md, struct uio *uio)
++{
++	const size_t bounce_bytes = 64 * 1024;
++	void *bounce = kalloc_data(bounce_bytes, Z_WAITOK);
++	int error = 0;
++	if (bounce == NULL) {
++		return ENOMEM;
++	}
++	while (uio_resid(uio) > 0) {
++		uint64_t offset = (uint64_t)uio->uio_offset;
++		int count = (int)mdev_transfer_bytes(mdev_bytes_from_pages(md->mdSize),
++		    offset, (uint64_t)uio_resid(uio), bounce_bytes);
++		if (count == 0) {
++			break;
++		}
++		if (uio->uio_rw == UIO_READ) {
++			error = md->mdOps->transfer(md->mdContext, offset, bounce, (size_t)count, 0);
++			if (!error) {
++				error = uiomove64((addr64_t)(uintptr_t)bounce, count, uio);
++			}
++		} else if (uio->uio_rw == UIO_WRITE) {
++			error = uiomove64((addr64_t)(uintptr_t)bounce, count, uio);
++			if (!error) {
++				error = md->mdOps->transfer(md->mdContext, offset, bounce, (size_t)count, 1);
++			}
++		} else {
++			error = EINVAL;
++		}
++		if (error) {
++			break;
++		}
++	}
++	kfree_data(bounce, bounce_bytes);
++	return error;
++}
++
+ static int
+ mdevrw(dev_t dev, struct uio *uio, __unused int ioflag)
+ {
+@@ -230,7 +273,15 @@ mdevrw(dev_t dev, struct uio *uio, __unused int ioflag)
+ 	if (uio_resid(uio) < 0) {
+ 		return EINVAL;
+ 	}
+-	mdata = ((addr64_t)mdev[devid].mdBase << 12) + uio->uio_offset; /* Point to the area in "file" */
++	if (mdev[devid].mdOps != NULL) {
++		return mdevrw_ops(&mdev[devid], uio);
++	}
++	count = (int)mdev_transfer_bytes(mdev_bytes_from_pages(mdev[devid].mdSize),
++	    (uint64_t)uio->uio_offset, (uint64_t)uio_resid(uio), INT_MAX);
++	if (count == 0) {
++		return 0;
++	}
++	mdata = (mdev[devid].mdBase << 12) + (uint64_t)uio->uio_offset;
+ 
+ 	saveflag = uio->uio_segflg;                                                     /* Remember what the request is */
+ 	/* Make sure we are moving from physical ram if physical device */
+@@ -239,19 +290,15 @@ mdevrw(dev_t dev, struct uio *uio, __unused int ioflag)
+ 			uio->uio_segflg = UIO_PHYS_USERSPACE64;
+ 		} else if (uio->uio_segflg == UIO_USERSPACE32) {
+ 			uio->uio_segflg = UIO_PHYS_USERSPACE32;
+-		} else {
++		} else if (uio->uio_segflg == UIO_USERSPACE) {
+ 			uio->uio_segflg = UIO_PHYS_USERSPACE;
++		} else if (uio->uio_segflg == UIO_SYSSPACE || uio->uio_segflg == UIO_SYSSPACE32) {
++			uio->uio_segflg = UIO_PHYS_SYSSPACE;
++		} else {
++			return EINVAL;
+ 		}
+ 	}
+ 
+-	if (uio->uio_offset > (mdev[devid].mdSize << 12)) {
+-		count = 0;
+-	} else {
+-		uint64_t room = (mdev[devid].mdSize << 12) - (uint64_t)uio->uio_offset;
+-
+-		count = (uint64_t)uio_resid(uio) < room ? (int)uio_resid(uio) : (int)(room > INT_MAX ? INT_MAX : room);
+-	}
+-
+ 	status = uiomove64(mdata, count, uio);     /* Move the data */
+ 	uio->uio_segflg = saveflag;                                                     /* Restore the flag */
+ 
+@@ -262,14 +309,16 @@ static void
+ mdevstrategy(struct buf *bp)
+ {
+ 	unsigned int left, lop, csize;
+-	vm_offset_t vaddr, blkoff;
++	vm_offset_t vaddr;
++	uint64_t blkoff, disk_bytes;
+ 	int devid;
+ 	addr64_t paddr, fvaddr;
+ 	ppnum_t pp;
+ 
+ 	devid = minor(buf_device(bp));                                                  /* Get minor device number */
+ 
+-	if ((mdev[devid].mdFlags & mdInited) == 0) {            /* Have we actually been defined yet? */
++	if (devid < 0 || devid >= NB_MAX_MDEVICES ||
++	    (mdev[devid].mdFlags & mdInited) == 0) {
+ 		buf_seterror(bp, ENXIO);
+ 		buf_biodone(bp);
+ 		return;
+@@ -277,24 +326,28 @@ mdevstrategy(struct buf *bp)
+ 
+ 	buf_setresid(bp, buf_count(bp));                                                /* Set byte count */
+ 
+-	blkoff = buf_blkno(bp) * mdev[devid].mdSecsize;         /* Get offset into file */
++	disk_bytes = mdev_bytes_from_pages(mdev[devid].mdSize);
++	if (!mdev_block_offset(buf_blkno(bp), (uint32_t)mdev[devid].mdSecsize, &blkoff)) {
++		buf_seterror(bp, EINVAL);
++		buf_biodone(bp);
++		return;
++	}
+ 
+ /*
+  *	Note that reading past end is an error, but reading at end is an EOF.  For these
+  *	we just return with resid == count.
+  */
+ 
+-	if (blkoff >= (mdev[devid].mdSize << 12)) {                     /* Are they trying to read/write at/after end? */
+-		if (blkoff != (mdev[devid].mdSize << 12)) {              /* Are we trying to read after EOF? */
++	if (blkoff >= disk_bytes) {                     /* Are they trying to read/write at/after end? */
++		if (blkoff != disk_bytes) {              /* Are we trying to read after EOF? */
+ 			buf_seterror(bp, EINVAL);                                               /* Yeah, this is an error */
+ 		}
+ 		buf_biodone(bp);                                                                /* Return */
+ 		return;
+ 	}
+ 
+-	if ((blkoff + buf_count(bp)) > (mdev[devid].mdSize << 12)) {            /* Will this read go past end? */
+-		buf_setcount(bp, (uint32_t)((mdev[devid].mdSize << 12) - blkoff));  /* Yes, trim to max */
+-	}
++	buf_setcount(bp, (uint32_t)mdev_transfer_bytes(disk_bytes, blkoff,
++	    buf_count(bp), UINT32_MAX));
+ 	/*
+ 	 * make sure the buffer's data area is
+ 	 * accessible
+@@ -303,6 +356,19 @@ mdevstrategy(struct buf *bp)
+ 		panic("ramstrategy: buf_map failed");
+ 	}
+ 
++	if (mdev[devid].mdOps != NULL) {
++		int error = mdev[devid].mdOps->transfer(mdev[devid].mdContext, blkoff,
++		    (void *)vaddr, buf_count(bp), (buf_flags(bp) & B_READ) == 0);
++		buf_unmap(bp);
++		if (error) {
++			buf_seterror(bp, error);
++		} else {
++			buf_setresid(bp, 0);
++		}
++		buf_biodone(bp);
++		return;
++	}
++
+ 	fvaddr = (mdev[devid].mdBase << 12) + blkoff;           /* Point to offset into ram disk */
+ 
+ 	if (buf_flags(bp) & B_READ) {                                   /* Is this a read? */
+@@ -319,9 +385,9 @@ mdevstrategy(struct buf *bp)
+ 				if (!pp) {                                                               /* Not found, what gives? */
+ 					panic("mdevstrategy: sink address %016llX not mapped", (addr64_t)((uintptr_t)vaddr));
+ 				}
+-				paddr = (addr64_t)(((addr64_t)pp << 12) | (addr64_t)(vaddr & 4095));    /* Get actual address */
++				paddr = mdev_buffer_pa(pp, vaddr, PAGE_SHIFT);    /* Get actual address */
+ 				bcopy_phys(fvaddr, paddr, csize);               /* Copy this on in */
+-				mapping_set_mod((ppnum_t)(paddr >> 12));        /* Make sure we know that it is modified */
++				mapping_set_mod((ppnum_t)(paddr >> PAGE_SHIFT));        /* Make sure we know that it is modified */
+ 
+ 				left = left - csize;                                    /* Calculate what is left */
+ 				vaddr = vaddr + csize;                                  /* Move to next sink address */
+@@ -342,7 +408,7 @@ mdevstrategy(struct buf *bp)
+ 				if (!pp) {                                                               /* Not found, what gives? */
+ 					panic("mdevstrategy: source address %016llX not mapped", (addr64_t)((uintptr_t)vaddr));
+ 				}
+-				paddr = (addr64_t)(((addr64_t)pp << 12) | (addr64_t)(vaddr & 4095));    /* Get actual address */
++				paddr = mdev_buffer_pa(pp, vaddr, PAGE_SHIFT);    /* Get actual address */
+ 
+ 				bcopy_phys(paddr, fvaddr, csize);               /* Move this on out */
+ 
+@@ -400,6 +466,23 @@ mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+ 	memdev_info = (dk_memdev_info_t *) data;
+ 
+ 	switch (cmd) {
++	case DKIOCSYNCHRONIZE:
++	case DKIOCSYNCHRONIZECACHE:
++		if (!(mdev[devid].mdFlags & mdInited)) {
++			return ENXIO;
++		}
++		if (mdev[devid].mdOps != NULL) {
++			error = mdev[devid].mdOps->synchronize(mdev[devid].mdContext);
++			if (error) {
++				return error;
++			}
++		}
++		/* The callback has completed its backend-specific cache flush.
++		 * The barrier below only orders local state.
++		 */
++		OSMemoryBarrier();
++		break;
++
+ 	case DKIOCGETMAXBLOCKCOUNTREAD:
+ 		*o = 32;
+ 		break;
+@@ -438,7 +521,7 @@ mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+ 		if (!(mdev[devid].mdFlags & mdInited)) {
+ 			return ENXIO;
+ 		}
+-		*o = ((mdev[devid].mdSize << 12) + mdev[devid].mdSecsize - 1) / mdev[devid].mdSecsize;
++		*o = (mdev_bytes_from_pages(mdev[devid].mdSize) + mdev[devid].mdSecsize - 1) / mdev[devid].mdSecsize;
+ 		break;
+ 
+ 	/*
+@@ -449,6 +532,9 @@ mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+ 	 *   What is your size?
+ 	 */
+ 	case DKIOCGETMEMDEVINFO:
++		if (mdev[devid].mdOps != NULL) {
++			return ENOTSUP; /* No direct physical/virtual memory range. */
++		}
+ 		if (!(mdev[devid].mdFlags & mdInited)) {
+ 			return ENXIO;
+ 		}
+@@ -532,7 +618,8 @@ mdevinit(__unused int the_cnt)
+ 		}
+ 		ba++;                                                                                   /* Step past '.' */
+ 		ba = cvtnum(ba, lp, &size);                                             /* Try to convert it */
+-		if (!size || (size & 0xFFF)) {
++		if (!size || (size & 0xFFF) || (size >> 12) > UINT_MAX ||
++		    base > UINT64_MAX - size) {
+ 			continue;                                       /* Allow only non-zer page size multiples */
+ 		}
+ 		if (ba < lp) {                                                                   /* If we are not at end, check end character */
+@@ -541,7 +628,7 @@ mdevinit(__unused int the_cnt)
+ 			}
+ 		}
+ 
+-		dev = mdevadd(devid, base >> 12, (unsigned)size >> 12, phys);   /* Go add the device */
++		dev = mdevadd(devid, base >> 12, (unsigned)(size >> 12), phys);   /* Go add the device */
+ 	}
+ 
+ #endif /* CONFIG_MEMDEV_INSECURE */
+@@ -635,11 +722,16 @@ cvtnum(char *pos, char *end, uint64_t *num)                     /* Convert to a
+ 
+ #endif /* CONFIG_MEMDEV_INSECURE */
+ 
+-dev_t
+-mdevadd(int devid, uint64_t base, unsigned int size, int phys)
++static dev_t
++mdevadd_internal(int devid, uint64_t base, unsigned int size, int phys,
++    const struct mdev_ops *ops, void *context)
+ {
+ 	int i;
+ 
++	if (size == 0 || base > (UINT64_MAX >> 12) ||
++	    mdev_bytes_from_pages(size) > UINT64_MAX - (base << 12)) {
++		return -1;
++	}
+ 	if (devid < 0) {
+ 		devid = -1;
+ 		for (i = 0; i < NB_MAX_MDEVICES; i++) {                                          /* Search all known memory devices */
+@@ -649,7 +741,7 @@ mdevadd(int devid, uint64_t base, unsigned int size, int phys)
+ 				}
+ 				continue;                                                               /* Skip check */
+ 			}
+-			if (!(((base + size - 1) < mdev[i].mdBase) || ((mdev[i].mdBase + mdev[i].mdSize - 1) < base))) { /* Is there any overlap? */
++			if (ops == NULL && mdev[i].mdOps == NULL && !(((base + size - 1) < mdev[i].mdBase) || ((mdev[i].mdBase + mdev[i].mdSize - 1) < base))) { /* Is there any overlap? */
+ 				panic("mdevadd: attempt to add overlapping memory device at %016llX-%016llX", mdev[i].mdBase, mdev[i].mdBase + mdev[i].mdSize - 1);
+ 			}
+ 		}
+@@ -699,6 +791,8 @@ mdevadd(int devid, uint64_t base, unsigned int size, int phys)
+ 		return -1;                                                                              /* Nope... */
+ 	}
+ 
++	mdev[devid].mdOps = ops;
++	mdev[devid].mdContext = context;
+ 	mdev[devid].mdBase = base;                                                      /* Set the base address of ram disk */
+ 	mdev[devid].mdSize = size;                                                      /* Set the length of the ram disk */
+ 	mdev[devid].mdSecsize = DEV_BSIZE;                                      /* Set starting block size */
+@@ -711,6 +805,25 @@ mdevadd(int devid, uint64_t base, unsigned int size, int phys)
+ 	return mdev[devid].mdBDev;
+ }
+ 
++dev_t
++mdevadd(int devid, uint64_t base, unsigned int size, int phys)
++{
++	return mdevadd_internal(devid, base, size, phys, NULL, NULL);
++}
++
++dev_t
++mdevadd_ops(int devid, uint64_t logical_bytes,
++    const struct mdev_ops *ops, void *context)
++{
++	if (logical_bytes == 0 || (logical_bytes & 4095) ||
++	    (logical_bytes >> 12) > UINT_MAX || ops == NULL ||
++	    ops->transfer == NULL || ops->synchronize == NULL) {
++		return -1;
++	}
++	return mdevadd_internal(devid, 0, (unsigned int)(logical_bytes >> 12),
++	           0, ops, context);
++}
++
+ 
+ dev_t
+ mdevlookup(int devid)
+@@ -756,6 +869,8 @@ mdevremoveall(void)
+ 		devfs_remove(mdev[i].mdbdevb);                  /* Remove the block device */
+ 		devfs_remove(mdev[i].mdcdevb);                  /* Remove the character device */
+ 
++		mdev[i].mdOps = NULL;
++		mdev[i].mdContext = NULL;
+ 		mdev[i].mdBase = 0;                             /* Clear the mdev's storage */
+ 		mdev[i].mdSize = 0;
+ 		mdev[i].mdSecsize = 0;
+@@ -783,8 +898,13 @@ mdevgetrange(int devid, uint64_t *base, uint64_t *size)
+ 		return -1;
+ 	}
+ 
++	if (mdev[devid].mdOps != NULL) {
++		*base = 0;
++		*size = 0;
++		return -1;
++	}
+ 	*base = mdev[devid].mdBase << 12;
+-	*size = mdev[devid].mdSize << 12;
++	*size = mdev_bytes_from_pages(mdev[devid].mdSize);
+ 
+ 	/* make sure (base, size) is a valid range and will not overflow */
+ 	assert(*size < (UINT64_MAX - *base));
+diff --git a/bsd/dev/redwood_goodix.c b/bsd/dev/redwood_goodix.c
+index f969cbd..2d82876 100644
+--- a/bsd/dev/redwood_goodix.c
++++ b/bsd/dev/redwood_goodix.c
+@@ -1027,7 +1027,9 @@ focaltech_write(uint8_t address, const uint8_t *data, uint32_t length)
+ #define FTS_ROMBOOT_CMD_START_APP       0x08
+ #define FTS_FLASH_PACKET_LENGTH         32		/* bytes per PRAM write */
+ 
++#if __has_include("redwood_focaltech_fw.h")
+ #include "redwood_focaltech_fw.h"
++#endif
+ 
+ /*
+  * Vendor fts_read_bootid(): send { 0x55, 0xAA } as a 2-byte framed write (treated as a write of
+@@ -1145,6 +1147,12 @@ focaltech_probe(bool verbose)
+ 		return true;
+ 	}
+ 
++#ifndef FOCALTECH_FW_LENGTH
++	if (verbose) {
++		printf("focaltech: redwood firmware was not supplied; refusing reset/upload\n");
++	}
++	return false;
++#else
+ 	if (!focaltech_enter_boot_rom()) {
+ 		if (verbose) {
+ 			printf("focaltech: chip not in boot ROM; last read runtime %02x %02x\n", high, low);
+@@ -1171,6 +1179,7 @@ focaltech_probe(bool verbose)
+ 		printf("focaltech: firmware did not come up (last runtime read %02x %02x)\n", high, low);
+ 	}
+ 	return false;
++#endif
+ }
+ 
+ /* ---- FocalTech touch reports --------------------------------------------------------------------- */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 6cb65f6..7c257c8 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -707,6 +707,10 @@ bsd_init(void)
+ 	/* Initialize the file systems. */
+ 	bsd_init_kprintf("calling vfsinit\n");
+ 	vfsinit();
++#if SWEET_HFS
++    extern void sweet_hfs_register(void);
++    sweet_hfs_register();
++#endif
+ 
+ #if CONFIG_PROC_UUID_POLICY
+ 	/* Initial proc_uuid_policy subsystem */
+diff --git a/bsd/sys/Makefile b/bsd/sys/Makefile
+index 9dbbd66..5c2870f 100644
+--- a/bsd/sys/Makefile
++++ b/bsd/sys/Makefile
+@@ -208,7 +208,7 @@ PRIVATE_KERNELFILES = \
+ 	mach_swapon.h \
+ 	mman_private.h \
+ 	monotonic.h \
+-	msgbuf.h \
++	msgbuf.h memdev_ops.h redwood_input.h \
+ 	eventvar.h \
+ 	persona.h \
+ 	preoslog.h \
+diff --git a/config/Makefile b/config/Makefile
+index 6d48aa2..674e972 100644
+--- a/config/Makefile
++++ b/config/Makefile
+@@ -188,7 +188,15 @@ $(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) $(DSTROOT)/$(KRESDIR)/$(MI_SU
+ 	@$(LOG_INSTALL) "$*"
+ 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+ 
++# Houji links its drivers into the kernel. This explicit build scope omits
++# external-kext SDK packaging; it does not claim those symbol sets are valid.
++ifeq ($(HOUJI_STANDALONE_KERNEL),1)
++ifneq ($(CURRENT_MACHINE_CONFIG),HOUJI)
++$(error HOUJI_STANDALONE_KERNEL is only valid for the HOUJI machine)
++endif
++endif
+ ifneq ($(RC_ProjectName),xnu_libraries)
++ifneq ($(HOUJI_STANDALONE_KERNEL),1)
+ 
+ do_build_all:: build_symbol_set_plists
+ do_config_all:: build_symbol_sets
+@@ -206,6 +214,7 @@ do_config_install:: \
+ 				$(DSTROOT)/$(KRESDIR)/$(MI_SUPPORTED_KPI_FILENAME)
+ endif
+ 
++endif # HOUJI_STANDALONE_KERNEL
+ else
+ # We are building XNU as a static library - avoid creating symbol sets
+ endif
+diff --git a/iokit/Kernel/GenericARMPE.cpp b/iokit/Kernel/GenericARMPE.cpp
+index da26569..5d1e1b5 100644
+--- a/iokit/Kernel/GenericARMPE.cpp
++++ b/iokit/Kernel/GenericARMPE.cpp
+@@ -23,6 +23,7 @@ extern int master_cpu;   /* redwood: boot CPU number, set by arm_init(); not in
+ #include <kern/thread_call.h>
+ 
+ #include "MiniDrivers.h"
++extern "C" void houji26_start_recovery_timer(void);
+ 
+ extern "C" {
+ kern_return_t processor_start(processor_t processor);
+@@ -301,6 +302,9 @@ GenericARMPE::start(IOService * provider)
+ 	registerService();
+ 
+ 	/* Stand-ins for the closed graphics drivers that the iOS window server talks to. */
++#if HOUJI_IOS26
++    houji26_start_recovery_timer();
++#endif
+ 	MiniIOSurfaceStart(this);
+ 	MiniIOMobileFramebufferStart(this);
+ 	MiniAppleKeyStoreStart();
+diff --git a/iokit/Kernel/IOMemoryDescriptor.cpp b/iokit/Kernel/IOMemoryDescriptor.cpp
+index 779de89..d2baced 100644
+--- a/iokit/Kernel/IOMemoryDescriptor.cpp
++++ b/iokit/Kernel/IOMemoryDescriptor.cpp
+@@ -100,6 +100,30 @@ enum {
+ 
+ OSDefineMetaClassAndAbstractStructors( IOMemoryDescriptor, OSObject )
+ 
++// Sample this development diagnostic instead of taking a stack trace for every
++// managed 16KiB segment of an imported surface. Mapping and ownership checks below
++// are unchanged. Keep the total count and first eight original backtraces.
++#if DEBUG || DEVELOPMENT
++static volatile uint64_t gHoujiManagedPhysicalMapReports;
++static void
++houjiReportManagedPhysicalPage(addr64_t address, mach_vm_size_t length)
++{
++ const uint64_t previous=__atomic_fetch_add(&gHoujiManagedPhysicalMapReports,UINT64_C(1),__ATOMIC_RELAXED);
++ if(previous<8)OSReportWithBacktrace("IOMemoryDescriptor physical with managed page 0x%qx:0x%qx",
++   (uint64_t)address,(uint64_t)length);
++}
++#endif
++extern "C" void
++houji_managed_physical_map_debug_report(void)
++{
++#if DEBUG || DEVELOPMENT
++ const uint64_t count=__atomic_load_n(&gHoujiManagedPhysicalMapReports,__ATOMIC_RELAXED);
++ const uint64_t emitted=count<8?count:8;
++ IOLog("HOUJI MAP DEBUG: managed-segments=%llu backtraces=%llu suppressed=%llu; diagnostic sampling only, memory checks unchanged\n",count,emitted,count-emitted);
++#endif
++}
++
++
+ #define super IOMemoryDescriptor
+ 
+ OSDefineMetaClassAndStructorsWithZone(IOGeneralMemoryDescriptor,
+@@ -5604,8 +5628,7 @@ IOMemoryDescriptor::populateDevicePager(
+ #if DEBUG || DEVELOPMENT
+ 		if ((kIOMemoryTypeUPL != type)
+ 		    && pmap_has_managed_page((ppnum_t) atop_64(physAddr), (ppnum_t) atop_64(physAddr + segLen - 1))) {
+-			OSReportWithBacktrace("IOMemoryDescriptor physical with managed page 0x%qx:0x%qx",
+-			    physAddr, (uint64_t)segLen);
++			houjiReportManagedPhysicalPage(physAddr,segLen);
+ 		}
+ #endif /* DEBUG || DEVELOPMENT */
+ 
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+index 1cd1f53..d16325f 100644
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -2560,6 +2560,11 @@ is_io_object_get_bundle_identifier(
+ 	return ret;
+ }
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++extern "C" bool houji_backlight_conforms(const OSObject *,const char *);
++extern "C" bool houji_backlight_allows_properties(IORegistryEntry *,OSObject *);
++#endif
++
+ /* Routine io_object_conforms_to */
+ kern_return_t
+ is_io_object_conforms_to(
+@@ -2572,6 +2577,9 @@ is_io_object_conforms_to(
+ 	}
+ 
+ 	*conforms = (NULL != object->metaCast( className ));
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	if (!*conforms) *conforms = houji_backlight_conforms(object,className);
++#endif
+ 
+ 	return kIOReturnSuccess;
+ }
+@@ -2728,7 +2736,62 @@ is_io_service_match_property_table_bin(
+ 	return internal_io_service_match_property_table(service, matching, matchingCnt, matches);
+ }
+ 
+-static kern_return_t
++static
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/*
++ * SWEET IOKit trace: registry and matching calls made by the processes
++ * named in boot-arg sweetiolog (comma separated, default "backboardd,SpringBoard";
++ * "-" turns it off) are printed as "IOK name: ...", at most 400 lines per
++ * boot, to find out what a daemon looks for before it gives up.
++ */
++static char sweet_iolog_names[128];
++static int sweet_iolog_parsed;
++static uint32_t sweet_iolog_lines;
++
++static bool
++sweet_iolog(char *name, size_t len)
++{
++	if (!sweet_iolog_parsed) {
++		if (!PE_parse_boot_argn("sweetiolog", sweet_iolog_names, sizeof(sweet_iolog_names))) {
++			strlcpy(sweet_iolog_names, "backboardd,SpringBoard", sizeof(sweet_iolog_names));
++		}
++		sweet_iolog_parsed = 1;
++	}
++	if (sweet_iolog_lines >= 400) {
++		return false;
++	}
++	proc_selfname(name, (int)len);
++	size_t n = strlen(name);
++	for (const char *t = sweet_iolog_names; *t;) {
++		const char *end = strchr(t, ',');
++		size_t tl = end ? (size_t)(end - t) : strlen(t);
++		if (tl == n && n > 0 && strncmp(t, name, n) == 0) {
++			sweet_iolog_lines++;
++			return true;
++		}
++		if (!end) {
++			break;
++		}
++		t = end + 1;
++	}
++	return false;
++}
++
++/* Compact XML of a matching dictionary, at most 240 characters. */
++static void
++sweet_iolog_dict(const char *name, const char *what, OSObject *dict, const char *result)
++{
++	OSSerialize *ser = OSSerialize::withCapacity(256);
++	const char *text = "?";
++	if (ser != NULL && dict != NULL && dict->serialize(ser)) {
++		text = ser->text();
++	}
++	IOLog("IOK %s: %s %.240s -> %s\n", name, what, text, result);
++	OSSafeReleaseNULL(ser);
++}
++#endif
++
++kern_return_t
+ internal_io_service_get_matching_services(
+ 	mach_port_t main_port,
+ 	const char * matching,
+@@ -2748,7 +2811,23 @@ internal_io_service_get_matching_services(
+ 
+ 	if ((dict = OSDynamicCast( OSDictionary, obj))) {
+ 		IOTaskRegistryCompatibilityMatching(current_task(), dict);
+-		*existing = IOUserIterator::withIterator(IOService::getMatchingServices( dict ));
++		OSIterator *found = IOService::getMatchingServices( dict );
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		char sname[32];
++		if (sweet_iolog(sname, sizeof(sname))) {
++			unsigned int count = 0;
++			if (found != NULL) {
++				while (found->getNextObject() != NULL) {
++					count++;
++				}
++				found->reset();
++			}
++			char res[16];
++			snprintf(res, sizeof(res), "%u found", count);
++			sweet_iolog_dict(sname, "matching", dict, res);
++		}
++#endif
++		*existing = IOUserIterator::withIterator(found);
+ 		kr = kIOReturnSuccess;
+ 	} else {
+ 		kr = kIOReturnBadArgument;
+@@ -2833,6 +2912,13 @@ internal_io_service_get_matching_service(
+ 		IOTaskRegistryCompatibilityMatching(current_task(), dict);
+ 		*service = IOService::copyMatchingService( dict );
+ 		kr = *service ? kIOReturnSuccess : kIOReturnNotFound;
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		char sname[32];
++		if (sweet_iolog(sname, sizeof(sname))) {
++			sweet_iolog_dict(sname, "matching1", dict,
++			    *service ? (*service)->getMetaClass()->getClassName() : "none");
++		}
++#endif
+ 	} else {
+ 		kr = kIOReturnBadArgument;
+ 	}
+@@ -2936,6 +3022,14 @@ internal_io_service_add_notification(
+ 			continue;
+ 		}
+ 		IOTaskRegistryCompatibilityMatching(current_task(), dict);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		{
++			char sname[32];
++			if (sweet_iolog(sname, sizeof(sname))) {
++				sweet_iolog_dict(sname, notification_type, dict, "notify");
++			}
++		}
++#endif
+ 
+ 		if ((sym == gIOPublishNotification)
+ 		    || (sym == gIOFirstPublishNotification)) {
+@@ -3417,6 +3511,15 @@ is_io_registry_entry_from_path(
+ 	}
+ 
+ 	entry = IORegistryEntry::fromPath( path );
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	{
++		char sname[32];
++		if (sweet_iolog(sname, sizeof(sname))) {
++			IOLog("IOK %s: path %.200s -> %s\n", sname, path,
++			    entry ? entry->getMetaClass()->getClassName() : "none");
++		}
++	}
++#endif
+ 
+ 	if (!entry && IOTaskRegistryCompatibility(current_task())) {
+ 		OSDictionary * matching;
+@@ -4161,7 +4264,11 @@ is_io_registry_entry_set_properties
+ 		}
+ #if CONFIG_MACF
+ 		else if (0 != mac_iokit_check_set_properties(kauth_cred_get(),
+-		    registry_entry, obj)) {
++		    registry_entry, obj)
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		    && !houji_backlight_allows_properties(entry,obj)
++#endif
++		    ) {
+ 			res = kIOReturnNotPermitted;
+ 		}
+ #endif
+@@ -4250,6 +4357,14 @@ is_io_registry_entry_get_child_iterator(
+ 
+ 	*iterator = IOUserIterator::withIterator(entry->getChildIterator(
+ 		    IORegistryEntry::getPlane( plane )));
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	{
++		char sname[32];
++		if (sweet_iolog(sname, sizeof(sname))) {
++			IOLog("IOK %s: children of %s in %.32s\n", sname, entry->getName(), plane);
++		}
++	}
++#endif
+ 
+ 	return kIOReturnSuccess;
+ }
+@@ -4465,6 +4580,15 @@ is_io_service_open_extended(
+ #endif
+ 		res = service->newUserClient( owningTask, (void *) owningTask,
+ 		    connect_type, propertiesDict, &client );
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		{
++			char sname[32];
++			if (sweet_iolog(sname, sizeof(sname))) {
++				IOLog("IOK %s: open %s type %u -> 0x%x\n", sname,
++				    service->getMetaClass()->getClassName(), connect_type, res);
++			}
++		}
++#endif
+ 
+ 		if (propertiesDict) {
+ 			propertiesDict->release();
+diff --git a/iokit/Kernel/MiniIOMobileFramebuffer.cpp b/iokit/Kernel/MiniIOMobileFramebuffer.cpp
+index 78a3b14..912f34e 100644
+--- a/iokit/Kernel/MiniIOMobileFramebuffer.cpp
++++ b/iokit/Kernel/MiniIOMobileFramebuffer.cpp
+@@ -12,6 +12,8 @@
+ 
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IOLocks.h>
++#include <IOKit/IOTimerEventSource.h>
++#include <IOKit/IOWorkLoop.h>
+ #include <IOKit/IOKitKeys.h>
+ #include <IOKit/IOService.h>
+ #include <IOKit/IOUserClient.h>
+@@ -39,6 +41,43 @@ extern struct vc_info vinfo;            /* the boot framebuffer, as the text con
+ #include <IOKit/IOBufferMemoryDescriptor.h>
+ 
+ #include "MiniIOSurface.h"
++#if HOUJI_IOS26
++#include "arm/HoujiBacklight.inc"
++#include "arm/HoujiDisplayTiming.inc"
++#include "arm/HoujiPresent26.h"
++#include <mach/vm_param.h>
++static uint64_t houji26Swaps, houji26Presents;
++struct HoujiCache26 {
++    unsigned attribute(uintptr_t address) {
++        uint64_t result;
++        __asm__ volatile("at s1e1r, %1\n\tisb\n\tmrs %0, par_el1" : "=r"(result) : "r"(address) : "memory");
++        return result & 1 ? 0 : (unsigned)(result >> 56);
++    }
++    void cleanInvalidate(uintptr_t address) {
++        __asm__ volatile("dc civac, %0" : : "r"(address) : "memory");
++    }
++    void barrier() { __asm__ volatile("dsb sy" : : : "memory"); }
++};
++static bool houji26AcquireSurface(MiniIOSurface *surface) {
++    if (!surface || surface->info.bytesPerElement != 4 || surface->info.planeCount != 0) return false;
++    uint64_t bytes = (uint64_t)surface->info.bytesPerRow * surface->info.height;
++    if (!surface->info.width || !surface->info.height ||
++        surface->info.bytesPerRow < (uint64_t)surface->info.width * 4 || bytes > SIZE_MAX) return false;
++    uintptr_t base; size_t capacity;
++    if (surface->client != NULL) {
++        if (surface->clientMap == NULL) return false;
++        base = (uintptr_t)surface->clientMap->getVirtualAddress();
++        capacity = (size_t)surface->clientMap->getLength();
++    } else {
++        if (surface->memory == NULL) return false;
++        base = (uintptr_t)surface->memory->getBytesNoCopy();
++        capacity = (size_t)surface->memory->getLength();
++    }
++    unsigned line = 4U << ((__builtin_arm_rsr64("CTR_EL0") >> 16) & 15);
++    HoujiCache26 ops;
++    return houji26AcquirePixels(base, capacity, (uintptr_t)surface->pixels(), (size_t)bytes, line, PAGE_SIZE, ops);
++}
++#endif
+ 
+ extern "C" void redwood_tl(const char * format, ...) __printflike(1, 2);
+ /* dada: the display controller showing the frames from buffers of its own (bsd/dev/hakios_dada_dpu.c, dadascan=1) */
+@@ -268,6 +307,9 @@ public:
+ 	uint8_t         fSwap[SWAP_QUEUE][SWAP_SIZE];   /* the swaps on their way to the panel (fb_queue), from fSwapFirst on */
+ 	MiniIOSurface * fSwapSurfaces[SWAP_QUEUE][SWAP_LAYERS]; /* ... their surfaces, held from SwapEnd on: their maker may let go of them */
+ 	unsigned        fSwapFirst, fSwapsWaiting;
++#if HOUJI_IOS26
++    uint32_t fHoujiFence[SWAP_QUEUE];
++#endif
+ 	/*
+ 	 * ... and not whenever the GPU happens to be done, but on a beat of the refresh rate
+ 	 * (boot-arg fb_beat=0: at once): frames then follow each other at an even pace whatever
+@@ -567,6 +609,9 @@ IOMobileFramebuffer::start(IOService * provider)
+ 		IOLog("MiniIOMobileFramebuffer: the display controller shows the frames from buffers of its own\n");
+ 	}
+ 	gFramebuffer = this;
++#if HOUJI_IOS26
++    houji_backlight_start(this);
++#endif
+ 
+ 	if (gRecSeconds != 0) {
+ 		/* one piece of physical memory: the loader will send it over USB as it lies */
+@@ -995,6 +1040,9 @@ IOMobileFramebuffer::present(const uint8_t * swap)
+ 	if (gTouchLat) {
+ 		redwood_tl("tl: s %u at %llu\n", swapWord(swap, SWAP_ID), micros(now));
+ 	}
++#if HOUJI_IOS26
++    const uint32_t producerFence = native_adreno_present_capture_fence();
++#endif
+ 	IOLockLock(fSwapLock);
+ 	fStatSwapsLate += fSwapTime != 0 && now - fSwapTime > period && now - fSwapTime < pause;
+ 	fSwapTime = now;
+@@ -1010,12 +1058,18 @@ IOMobileFramebuffer::present(const uint8_t * swap)
+ 	unsigned slot = (fSwapFirst + fSwapsWaiting) % SWAP_QUEUE;
+ 
+ 	memcpy(fSwap[slot], swap, SWAP_SIZE);
++#if HOUJI_IOS26
++    fHoujiFence[slot] = producerFence;
++#endif
+ 	for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+ 		uint32_t sid = swapWord(swap, SWAP_SURFACE(layer));
+ 
+ 		fSwapSurfaces[slot][layer] = sid != 0 ? MiniIOSurfaceCopy(sid) : NULL;
+ 	}
+ 	fSwapsWaiting++;
++#if HOUJI_IOS26
++    __atomic_fetch_add(&houji26Swaps, 1ULL, __ATOMIC_RELAXED);
++#endif
+ 	IOLockWakeup(fSwapLock, fSwap, true);
+ 	IOLockUnlock(fSwapLock);
+ }
+@@ -1039,8 +1093,23 @@ IOMobileFramebuffer::presenter(void)
+ 		}
+ 		memcpy(swap, fSwap[fSwapFirst], SWAP_SIZE);
+ 		memcpy(surfaces, fSwapSurfaces[fSwapFirst], sizeof(surfaces));
++#if HOUJI_IOS26
++        const uint32_t producerFence = fHoujiFence[fSwapFirst];
++#endif
+ 		IOLockUnlock(fSwapLock);
++#if HOUJI_IOS26
++        bool completed = false;
++        {
++            HoujiPresentLease26 lease(producerFence);
++            bool readable = lease.ready();
++            if (readable && lease.gpu()) for (unsigned layer = 0; layer < SWAP_LAYERS; ++layer)
++                if (surfaces[layer] && !houji26AcquireSurface(surfaces[layer])) { readable = false; break; }
++            if (readable) { show(swap, surfaces); completed = true; }
++        } /* Drop the issuer gate before sleeping, surface destruction or allocator work. */
++        if (!completed) { IOSleep(1); continue; }
++#else
+ 		show(swap, surfaces);
++#endif
+ 		for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+ 			if (surfaces[layer] != NULL) {
+ 				MiniIOSurfaceDrop(surfaces[layer]);
+@@ -1106,6 +1175,7 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
+ 	 * (still frames are the same picture). A surface whose last submission has not changed since it was last shown is waited for, up
+ 	 * to SWAP_NEW_MS, to be named by a newer one; then for the GPU, as before.
+ 	 */
++#if !HOUJI_IOS26
+ 	for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+ 		MiniIOSurface * s = surfaces[layer];
+ 		unsigned slot;
+@@ -1139,6 +1209,7 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
+ 			    swapWord(swap, SWAP_ID), swapWord(swap, SWAP_SURFACE(layer)), SWAP_GPU_MS);
+ 		}
+ 	}
++#endif
+ 	fStatWaiting += mach_absolute_time() - began;
+ 	began = ready = mach_absolute_time();
+ 	if (gOnTheBeat && !fScan) {        /* (scanning out, the display's own refresh paces the frames) */
+@@ -1276,6 +1347,10 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
+ 		record(recorded);
+ 	}
+ 	fSwapsShown++;
++#if HOUJI_IOS26
++    __atomic_fetch_add(&houji26Presents, 1ULL, __ATOMIC_RELAXED);
++    HoujiDisplayTiming::start();
++#endif
+ 	if (gTouchLat) {
+ 		redwood_tl("tl: v %u ready %llu shown %llu done %llu\n", swapWord(swap, SWAP_ID), micros(ready), micros(shown),
+ 		    micros(drawn));
+@@ -1779,13 +1854,7 @@ publishDisplayNode(void)
+ 
+ static bool gAcceleratorTakesProperties;        /* boot-arg metal=1 */
+ 
+-class IOAcceleratorES : public IOService
+-{
+-	OSDeclareDefaultStructors(IOAcceleratorES);
+-
+-public:
+-	virtual IOReturn setProperties(OSObject * properties) APPLE_KEXT_OVERRIDE;
+-};
++#include "HoujiIOAccelerator26.h"
+ 
+ OSDefineMetaClassAndStructors(IOAcceleratorES, IOService);
+ 
+@@ -1930,10 +1999,29 @@ MiniIOMobileFramebufferStart(IOService * provider)
+ 		return;
+ 	}
+ 	if (fb->start(provider)) {
+-		publishDisplayNode();
+-		publishAccelerator(provider);
++        publishDisplayNode();
++#if !HOUJI_IOS26
++        publishAccelerator(provider);
++#endif
+ 	} else {
+ 		fb->detach(provider);
+ 	}
+ 	fb->release();
+ }
++
++#if HOUJI_IOS26
++extern "C" void houji_framebuffer_counts(uint64_t *swaps, uint64_t *presents) {
++    if (swaps) *swaps = __atomic_load_n(&houji26Swaps, __ATOMIC_RELAXED);
++    if (presents) *presents = __atomic_load_n(&houji26Presents, __ATOMIC_RELAXED);
++}
++extern "C" unsigned houji_framebuffer_snapshot(char *out, unsigned capacity) {
++    if (!out || !capacity) return 0;
++    uint64_t swaps = 0, presents = 0; houji_framebuffer_counts(&swaps, &presents);
++    int written = snprintf(out, capacity, "HOUJI26 FRAMEBUFFER: swaps=%llu CPU-copies=%llu; not panel FPS\n", swaps, presents);
++    return written > 0 ? ((unsigned)written < capacity ? (unsigned)written : capacity - 1) : 0;
++}
++extern "C" void houji_framebuffer_report(void) {
++    char line[192]; houji_framebuffer_snapshot(line, sizeof(line)); IOLog("%s", line);
++}
++extern "C" void houji_framebuffer_history_report(void) { houji_framebuffer_report(); }
++#endif
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
+index dbb3f05..750cf8f 100644
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -65,6 +65,9 @@ extern "C" {
+ 
+ extern dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys);
+ extern dev_t mdevlookup(int devid);
++#if HOUJI_IOS26
++extern void houji_ufs_root_attach(void);
++#endif
+ extern void mdevremoveall(void);
+ extern int mdevgetrange(int devid, uint64_t *base, uint64_t *size);
+ extern void di_root_ramfile(IORegistryEntry * entry);
+@@ -817,6 +820,9 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
+ //	Now check if we are trying to root on a memory device
+ //
+ 
++#if HOUJI_IOS26
++    if (rdBootVar[0] == 'm' && rdBootVar[1] == 'd') houji_ufs_root_attach();
++#endif
+ 	if ((rdBootVar[0] == 'm') && (rdBootVar[1] == 'd') && (rdBootVar[3] == 0)) {
+ 		dchar = xchar = rdBootVar[2];                                                   /* Get the actual device */
+ 		if ((xchar >= '0') && (xchar <= '9')) {
+diff --git a/iokit/conf/files b/iokit/conf/files
+index 197834c..2f83311 100644
+--- a/iokit/conf/files
++++ b/iokit/conf/files
+@@ -168,3 +168,45 @@ iokit/bsddev/skywalk/IOSkywalkSupport.cpp		optional iokitcpp skywalk
+ 
+ # Exclaves
+ iokit/Exclaves/Exclaves.cpp			optional iokitcpp
++
++# houji SM8650 native devices
++iokit/Kernel/houji-ufs-root/HoujiUfsRead.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoCpu.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoMemory.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/ArmSmmu4K.c optional iokit
++iokit/Kernel/houji-ufs-root/ArmSmmu4KAudit.c optional iokit
++iokit/Kernel/houji-ufs-root/ArmSmmu4KContext.c optional iokit
++iokit/Kernel/houji-ufs-root/ArmSmmu4KProgram.c optional iokit
++iokit/Kernel/houji-ufs-root/houji_hfi_inactive.c optional iokit
++iokit/Kernel/houji-ufs-root/vendor/AdrenoFirmware/AdrenoFirmware.c optional iokit
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoFirmware.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoSha256.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/houji_stock_native.c optional iokit
++iokit/Kernel/houji-ufs-root/houji_full_host_runtime.c optional iokit
++iokit/Kernel/houji-ufs-root/NativeAdrenoRing.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/AdrenoPM4.c optional iokit
++iokit/Kernel/houji-ufs-root/ArmSmmu4KLive.c optional iokit
++iokit/Kernel/houji-ufs-root/ArmSmmu4KStreams.c optional iokit
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoVm.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoSmmuMemory.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoSubmit.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoUserClient.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoTimer.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/Adreno740/NativeAdrenoPublish.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/Adreno740/HoujiNativeAccelerator.cpp optional iokitcpp
++
++iokit/Kernel/arm/HoujiPlatform26.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/QcomSmem.c                   optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomSmp2p.c                  optional iokit
++iokit/Kernel/houji-ufs-root/battery/FatVolume.c                  optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomMdt.c                    optional iokit
++iokit/Kernel/houji-ufs-root/battery/HoujiFirmware.cpp            optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/HoujiAdsp.cpp            optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/HoujiAdspTransport.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/HoujiBattery.cpp optional iokitcpp
++iokit/Kernel/houji-ufs-root/battery/HoujiQrtr.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/HoujiBattmgr.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomGlink.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomQmp.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomQrtr.c optional iokit
++iokit/Kernel/houji-ufs-root/battery/QcomRpmh.c            optional iokit
+diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
+index ec4c59b..43ba969 100644
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -29,7 +29,7 @@ SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+ else ifneq ($(findstring _host,$(RC_ProjectName)),)
+ SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+ else
+-SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T6020 T6030 T6031 T6041 T6050 T8101 T8103 T8112 T8122 T8132 T8142 VMAPPLE
++SUPPORTED_ARM64_MACHINE_CONFIGS = HOUJI BCM2837 T6000 T6020 T6030 T6031 T6041 T6050 T8101 T8103 T8112 T8122 T8132 T8142 VMAPPLE
+ 
+ SPTM_ENABLED_SOCS_MacOSX = t6000 t8112 t6020 t8122 t6030 t6031 t6041 t6050 t8132 t8142
+ EXCLAVES_ENABLED_SOCS_MacOSX = t8142 t6050
+@@ -79,6 +79,7 @@ COMPONENT_LIST	= osfmk bsd libkern iokit pexpert libsa security san
+ COMPONENT	= $(if $(word 2,$(subst /, ,$(RELATIVE_SOURCE_PATH))),$(word 2,$(subst /, ,$(RELATIVE_SOURCE_PATH))),$(firstword $(subst /, ,$(RELATIVE_SOURCE_PATH))))
+ COMPONENT_IMPORT_LIST = $(filter-out $(COMPONENT),$(COMPONENT_LIST))
+ 
++MACHINE_FLAGS_ARM64_HOUJI = -DARM64_BOARD_CONFIG_HOUJI -DARM64_BOARD_CONFIG_SWEET -Xclang -target-feature -Xclang +pan
+ MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837 -Xclang -target-feature -Xclang +pan
+ MACHINE_FLAGS_ARM64_T8101 = -DARM64_BOARD_CONFIG_T8101			-mcpu=apple-a14
+ MACHINE_FLAGS_ARM64_T8103 = -DARM64_BOARD_CONFIG_T8103                  -mcpu=apple-a14
+@@ -1156,7 +1157,7 @@ LD_KERNEL_ARCHIVES += $(REDWOOD_OBJECTS)
+ # Link binary support library.  redwood: BCM2837 is a non-Apple board with no closed
+ # KernelSupport lib$(CURRENT_MACHINE_CONFIG).os.*.a; its platform code is built into the kernel
+ # (GenericARMPE and the redwood drivers), so skip the force_load for it.
+-ifeq ($(filter NONE BCM2837,$(CURRENT_MACHINE_CONFIG)),)
++ifeq ($(filter NONE BCM2837 HOUJI,$(CURRENT_MACHINE_CONFIG)),)
+         LDFLAGS_KERNEL_ONLY += -rdynamic -Wl,-force_load,$(KDKROOT)/System/Library/KernelSupport/lib$(CURRENT_MACHINE_CONFIG).os.$(CURRENT_KERNEL_CONFIG).a
+ endif
+ 
+diff --git a/osfmk/arm64/gic_v3_irq.c b/osfmk/arm64/gic_v3_irq.c
+index d4d75ad..ce964b5 100644
+--- a/osfmk/arm64/gic_v3_irq.c
++++ b/osfmk/arm64/gic_v3_irq.c
+@@ -195,8 +195,11 @@ gic_spi_handle(uint32_t intid)
+ static void
+ gic_distributor_settle(void)
+ {
++	uint64_t start = __builtin_arm_rsr64("CNTPCT_EL0");
++	uint64_t ticks = __builtin_arm_rsr64("CNTFRQ_EL0");
+ 	while (gic_read32(gicd_base + GICD_CTLR) & GICD_CTLR_RWP) {
+-		/* wait for the change to take effect */
++		if (__builtin_arm_rsr64("CNTPCT_EL0") - start >= ticks)
++			panic("gic: distributor RWP timeout");
+ 	}
+ }
+ 
+@@ -298,6 +301,13 @@ gic_v3_spi_count(uint32_t intid)
+ 	return 0;
+ }
+ 
++static uint64_t houji26_timer_irqs[MAX_CPUS], houji26_ipi_irqs[MAX_CPUS];
++void houji26_irq_counts(unsigned cpu, uint64_t *timer, uint64_t *ipi);
++void houji26_irq_counts(unsigned cpu, uint64_t *timer, uint64_t *ipi) {
++    *timer = cpu < MAX_CPUS ? __atomic_load_n(&houji26_timer_irqs[cpu], __ATOMIC_RELAXED) : 0;
++    *ipi = cpu < MAX_CPUS ? __atomic_load_n(&houji26_ipi_irqs[cpu], __ATOMIC_RELAXED) : 0;
++}
++
+ static void
+ gic_irq_handler(__unused void *target, __unused void *refCon, __unused void *nub, __unused int source)
+ {
+@@ -313,10 +323,12 @@ gic_irq_handler(__unused void *target, __unused void *refCon, __unused void *nub
+ 		gic_active_iar[cpu] = iar | GIC_IAR_TAKEN;
+ 
+ 		if (intid == GIC_INTID_VTIMER) {
++            __atomic_fetch_add(&houji26_timer_irqs[cpu], 1ULL, __ATOMIC_RELAXED);
+ 			/* same sequence as the FIQ path in sleh_fiq() */
+ 			getCpuDatap()->cpu_decrementer = -1; /* Large */
+ 			rtclock_intr(TRUE);
+ 		} else if (intid == GIC_SGI_SIGNAL) {
++            __atomic_fetch_add(&houji26_ipi_irqs[cpu], 1ULL, __ATOMIC_RELAXED);
+ 			cpu_signal_handler();
+ 		} else if (intid == GIC_SGI_STOP) {
+ 			/* comes back only if nobody has in fact asked for that */
+@@ -463,8 +475,11 @@ gic_v3_irq_cpu_init(void)
+ 	uint32_t waker = gic_read32(gicr + GICR_WAKER);
+ 	if (waker & (GICR_WAKER_PROCSLEEP | GICR_WAKER_CHILDASLEEP)) {
+ 		gic_write32(gicr + GICR_WAKER, waker & ~GICR_WAKER_PROCSLEEP);
++		uint64_t start = __builtin_arm_rsr64("CNTPCT_EL0");
++		uint64_t ticks = __builtin_arm_rsr64("CNTFRQ_EL0");
+ 		while (gic_read32(gicr + GICR_WAKER) & GICR_WAKER_CHILDASLEEP) {
+-			/* spin until the redistributor is awake */
++			if (__builtin_arm_rsr64("CNTPCT_EL0") - start >= ticks)
++				panic("gic: redistributor wake timeout");
+ 		}
+ 	}
+ 
+@@ -484,8 +499,16 @@ gic_v3_irq_cpu_init(void)
+ 	}
+ 
+ 	/* Virtual timer PPI (and those): Group 1 (IRQ), default priority, enabled */
+-	gic_write32(gicr + GICR_IGROUPR0, gic_read32(gicr + GICR_IGROUPR0) | mine);
++	#if HOUJI_IOS26
++    /* r40: reading the redistributor SGI group registers aborts on houji.
++     * Retain the qualified write-only Group1 initialization from iOS16. */
++    gic_write32(gicr + GICR_IGROUPR0, 0xffffffffU);
++    for (unsigned irq = 0; irq < 32; ++irq)
++        *(volatile uint8_t *)(gicr + GICR_IPRIORITYR(irq)) = GIC_PRIORITY_DEFAULT;
++#else
++    gic_write32(gicr + GICR_IGROUPR0, gic_read32(gicr + GICR_IGROUPR0) | mine);
+ 	gic_write32(gicr + GICR_IGRPMODR0, gic_read32(gicr + GICR_IGRPMODR0) & ~mine);
++#endif
+ 	*(volatile uint8_t *)(gicr + GICR_IPRIORITYR(GIC_INTID_VTIMER)) = GIC_PRIORITY_DEFAULT;
+ 	gic_write32(gicr + GICR_ISENABLER0, mine);
+ 
+@@ -493,9 +516,7 @@ gic_v3_irq_cpu_init(void)
+ 	uint32_t ctlr = gic_read32(gicd_base + GICD_CTLR);
+ 	if ((ctlr & (GICD_CTLR_ENABLE_G1NS | GICD_CTLR_ARE_NS)) != (GICD_CTLR_ENABLE_G1NS | GICD_CTLR_ARE_NS)) {
+ 		gic_write32(gicd_base + GICD_CTLR, ctlr | GICD_CTLR_ENABLE_G1NS | GICD_CTLR_ARE_NS);
+-		while (gic_read32(gicd_base + GICD_CTLR) & GICD_CTLR_RWP) {
+-			/* wait for the write to take effect */
+-		}
++		gic_distributor_settle();
+ 	}
+ 
+ 	/*
+@@ -504,6 +525,9 @@ gic_v3_irq_cpu_init(void)
+ 	 * kernel that left in the middle of an interrupt without ending it would leave this one
+ 	 * waiting for an end that never comes.
+ 	 */
++#if HOUJI_IOS26
++    __builtin_arm_wsr64("ICC_CTLR_EL1", __builtin_arm_rsr64("ICC_CTLR_EL1") & ~2ULL);
++#endif
+ 	__builtin_arm_wsr64("ICC_AP1R0_EL1", 0);
+ 	__builtin_arm_wsr64("ICC_PMR_EL1", 0xff);
+ 	__builtin_arm_wsr64("ICC_BPR1_EL1", 0);
+@@ -516,3 +540,7 @@ gic_v3_irq_cpu_init(void)
+ }
+ 
+ #endif /* GENERIC_GIC_V3_IRQ */
++
++#if HOUJI_IOS26
++#include "../../pexpert/arm/HoujiSpi26.inc"
++#endif
+diff --git a/osfmk/arm64/loader_return.c b/osfmk/arm64/loader_return.c
+index b879367..b16c057 100644
+--- a/osfmk/arm64/loader_return.c
++++ b/osfmk/arm64/loader_return.c
+@@ -509,6 +509,10 @@ loader_log_append_msgbuf(void)
+ void
+ loader_return(void)
+ {
++#if HOUJI_IOS26
++    extern void houji26_reset_recovery(void) __attribute__((noreturn));
++    if (loader_stub_slot[1] == 0) houji26_reset_recovery();
++#endif
+ 	redwood_ufs_close();             /* no read of the storage in flight from here on */
+ #if defined(GENERIC_PSCI_SMP)
+ 	/*
+diff --git a/osfmk/arm64/psci_smp.c b/osfmk/arm64/psci_smp.c
+index 4ddd78e..709aa52 100644
+--- a/osfmk/arm64/psci_smp.c
++++ b/osfmk/arm64/psci_smp.c
+@@ -96,6 +96,14 @@ struct psci_smp_start_fault {
+ _Static_assert(sizeof(struct psci_smp_start_fault) == 64, "one cache line");
+ 
+ static uint32_t psci_smp_cpu_stage[MAX_CPUS];   /* PSCI_SMP_CPU_*, by cpu number */
++uint32_t houji26_running_mask(void);
++uint32_t houji26_running_mask(void) {
++    uint32_t mask = 0;
++    for (unsigned cpu = 0; cpu < MAX_CPUS; ++cpu)
++        if (os_atomic_load(&psci_smp_cpu_stage[cpu], acquire) == PSCI_SMP_CPU_RUNNING) mask |= 1u << cpu;
++    return mask;
++}
++
+ static uint32_t psci_smp_started;               /* a bit per core that CPU_ON was granted for */
+ 
+ static int      psci_smp_stop_owner = -1;       /* the processor that began the return to the boot loader */
+diff --git a/osfmk/conf/files.arm64 b/osfmk/conf/files.arm64
+index 49f7f11..c5f60f8 100644
+--- a/osfmk/conf/files.arm64
++++ b/osfmk/conf/files.arm64
+@@ -137,3 +137,7 @@ osfmk/kern/ecc_init.c		standard
+ osfmk/kern/ecc_logging.c	optional config_ecc_logging
+ 
+ osfmk/kern/memory_error_logging.c	standard
++
++osfmk/arm64/houji_pac_config.c standard
++
++osfmk/arm64/houji_recovery26.c standard
+diff --git a/pexpert/pexpert/arm64/Makefile b/pexpert/pexpert/arm64/Makefile
+index 9d094bf..a7db458 100644
+--- a/pexpert/pexpert/arm64/Makefile
++++ b/pexpert/pexpert/arm64/Makefile
+@@ -34,7 +34,7 @@ PRIVATE_KERNELFILES = \
+ 	H16.h \
+ 	H17.h \
+ 	VMAPPLE.h \
+-	BCM2837.h
++	BCM2837.h HOUJI.h
+ 
+ 
+ # Headers installed into System.framework/PrivateHeaders (userspace internal SDK only).
+diff --git a/pexpert/pexpert/arm64/board_config.h b/pexpert/pexpert/arm64/board_config.h
+index 70fd089..3974139 100644
+--- a/pexpert/pexpert/arm64/board_config.h
++++ b/pexpert/pexpert/arm64/board_config.h
+@@ -304,8 +304,12 @@
+ 
+ 
+ 
+-#ifdef ARM64_BOARD_CONFIG_BCM2837
++#if defined(ARM64_BOARD_CONFIG_BCM2837) || defined(ARM64_BOARD_CONFIG_HOUJI)
++#ifdef ARM64_BOARD_CONFIG_HOUJI
++#include <pexpert/arm64/HOUJI.h>
++#else
+ #include <pexpert/arm64/BCM2837.h>
++#endif
+ 
+ #define MAX_L2_CLINE                   6
+ #define MAX_CPUS                       8 /* QEMU virt / standard ARMv9 bring-up */

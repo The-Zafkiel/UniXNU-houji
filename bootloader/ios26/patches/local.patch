@@ -1,0 +1,408 @@
+--- a/DarwinBootPkg/Driver/DarwinBoot.c
++++ b/DarwinBootPkg/Driver/DarwinBoot.c
+@@ -25,27 +25,13 @@
+ #define BLOCK_SIZE   SIZE_32MB
+ #define MAX_SEGMENTS 64
+ 
+-typedef struct {
+-  UINT64  Address;
+-  UINT64  Size;
+-  UINT64  FileOffset;
+-  UINT64  FileSize;
+-  UINT32  Protection;
+-} SEGMENT;
+-
+-typedef struct {
+-  SEGMENT  Segments[MAX_SEGMENTS];
+-  UINTN    Count;
+-  UINT64   Base;
+-  UINT64   End;
+-  UINT64   Entry;
+-} KERNEL;
+-
+ STATIC EFI_HANDLE  mImage;
+ UINT64 EFIAPI DarwinCurrentEl (VOID);
+-VOID EFIAPI DarwinEnter (UINT64 Args, UINT64 Entry, UINT64 Memory, UINT64 Size, UINT64 VideoBase, UINT64 VideoBytes);
++VOID EFIAPI DarwinEnter (UINT64 Args, UINT64 Entry, UINT64 Memory, UINT64 Size, UINT64 VideoBase, UINT64 VideoBytes, UINT64 PacKeys);
+ 
+ #define READ_SYSREG(Name)  ({ UINT64 Value_; __asm__ volatile ("mrs %0, " #Name : "=r" (Value_)); Value_; })
++#include "DarwinPac.h"
++#include "DarwinBootImage.h"
+ 
+ #if defined (HOUJI_LOW_UEFI_ALLOCS)
+ STATIC void FlushOwnedMemory (void *Base, unsigned long long Bytes) {
+@@ -75,8 +61,6 @@
+ }
+ #endif
+ 
+-STATIC UINT32 U32 (CONST VOID *P) { return ReadUnaligned32 ((CONST UINT32 *)P); }
+-STATIC UINT64 U64 (CONST VOID *P) { return ReadUnaligned64 ((CONST UINT64 *)P); }
+ 
+ STATIC
+ EFI_STATUS
+@@ -138,210 +122,6 @@
+   File->Close (File);
+   if (EFI_ERROR (Status) && (*Data != NULL)) { FreePool (*Data); *Data = NULL; }
+   return Status;
+-}
+-
+-STATIC
+-EFI_STATUS
+-ParseKernel (CONST UINT8 *Data, UINTN Size, KERNEL *Kernel)
+-{
+-  UINTN    Offset;
+-  UINTN    End;
+-  UINTN    Index;
+-  UINTN    Other;
+-  UINT32   Count;
+-  UINT32   Command;
+-  UINT32   Length;
+-  SEGMENT  *Segment;
+-  BOOLEAN  HasEntry;
+-  BOOLEAN  Executable;
+-
+-  if ((Size < 32) || (U32 (Data) != 0xfeedfacf) || (U32 (Data + 4) != 0x100000c) ||
+-      (U32 (Data + 8) != 0) || (U32 (Data + 12) != 2)) {
+-    return EFI_UNSUPPORTED;
+-  }
+-  if (U32 (Data + 20) > Size - 32) { return EFI_LOAD_ERROR; }
+-  ZeroMem (Kernel, sizeof (*Kernel));
+-  Count = U32 (Data + 16);
+-  End = 32 + U32 (Data + 20);
+-  Offset = 32;
+-  HasEntry = FALSE;
+-  for (Index = 0; Index < Count; Index++) {
+-    if (End - Offset < 8) { return EFI_LOAD_ERROR; }
+-    Command = U32 (Data + Offset);
+-    Length = U32 (Data + Offset + 4);
+-    if ((Length < 8) || (Length & 7) || (Length > End - Offset)) { return EFI_LOAD_ERROR; }
+-    if (Command == 0x19) {
+-      if ((Length < 72) || (U32 (Data + Offset + 64) > (Length - 72) / 80) ||
+-          (Kernel->Count == MAX_SEGMENTS)) { return EFI_LOAD_ERROR; }
+-      if (U64 (Data + Offset + 32) != 0) {
+-        Segment = &Kernel->Segments[Kernel->Count++];
+-        Segment->Address = U64 (Data + Offset + 24);
+-        Segment->Size = U64 (Data + Offset + 32);
+-        Segment->FileOffset = U64 (Data + Offset + 40);
+-        Segment->FileSize = U64 (Data + Offset + 48);
+-        Segment->Protection = U32 (Data + Offset + 60);
+-        if ((Segment->Size > WINDOW_SIZE) || (Segment->Address > MAX_UINT64 - Segment->Size) ||
+-            (Segment->FileSize > Segment->Size) || (Segment->FileOffset > Size) ||
+-            (Segment->FileSize > Size - Segment->FileOffset)) { return EFI_LOAD_ERROR; }
+-      }
+-    } else if (Command == 5) {
+-      if (HasEntry || (Length != 288) || (U32 (Data + Offset + 8) != 6) ||
+-          (U32 (Data + Offset + 12) != 68)) { return EFI_LOAD_ERROR; }
+-      Kernel->Entry = U64 (Data + Offset + 272);
+-      HasEntry = TRUE;
+-    }
+-    Offset += Length;
+-  }
+-  if ((Offset != End) || !HasEntry || (Kernel->Count == 0)) { return EFI_LOAD_ERROR; }
+-  Kernel->Base = MAX_UINT64;
+-  Executable = FALSE;
+-  for (Index = 0; Index < Kernel->Count; Index++) {
+-    Segment = &Kernel->Segments[Index];
+-    Kernel->Base = MIN (Kernel->Base, Segment->Address);
+-    Kernel->End = MAX (Kernel->End, Segment->Address + Segment->Size);
+-    if ((Kernel->Entry >= Segment->Address) && (Kernel->Entry - Segment->Address < Segment->FileSize) &&
+-        ((Segment->Protection & 4) != 0)) { Executable = TRUE; }
+-    for (Other = 0; Other < Index; Other++) {
+-      if ((Segment->Address < Kernel->Segments[Other].Address + Kernel->Segments[Other].Size) &&
+-          (Kernel->Segments[Other].Address < Segment->Address + Segment->Size)) { return EFI_LOAD_ERROR; }
+-    }
+-  }
+-  Kernel->Base &= ~((UINT64)SIZE_32MB - 1);
+-  if (!Executable || (Kernel->Entry & 3) || (Kernel->Base & (SIZE_16KB - 1)) ||
+-      (Kernel->Base > MAX_UINT64 - WINDOW_SIZE) ||
+-      (Kernel->End - Kernel->Base > WINDOW_SIZE - SIZE_2MB)) { return EFI_LOAD_ERROR; }
+-  return EFI_SUCCESS;
+-}
+-
+-STATIC
+-BOOLEAN
+-AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN ParentPath, UINTN *RamdiskOffset, UINTN *TrustCacheOffset, UINT64 *WindowSize, BOOLEAN *KeepPacked, UINTN *DramBaseOffset, UINTN *DramSizeOffset)
+-{
+-  UINT32 Properties;
+-  UINT32 Children;
+-  UINT32 Length;
+-  UINTN  Index;
+-  UINTN  Path;
+-  UINTN  Candidate;
+-  UINTN  TrustCandidate;
+-  UINTN  MemoryCandidate;
+-  UINTN  DramBaseCandidate;
+-  UINTN  DramSizeCandidate;
+-  CONST UINT8 *Name;
+-  UINTN  NameLength;
+-
+-  Name = NULL;
+-  NameLength = 0;
+-  Candidate = MAX_UINTN;
+-  TrustCandidate = MAX_UINTN;
+-  MemoryCandidate = MAX_UINTN;
+-  DramBaseCandidate = MAX_UINTN;
+-  DramSizeCandidate = MAX_UINTN;
+-  if ((Depth > 64) || (Size - *Offset < 8)) { return FALSE; }
+-  Properties = U32 (Data + *Offset);
+-  Children = U32 (Data + *Offset + 4);
+-  *Offset += 8;
+-  if (Properties > (Size - *Offset) / 36) { return FALSE; }
+-  for (Index = 0; Index < Properties; Index++) {
+-    if (Size - *Offset < 36) { return FALSE; }
+-    if (ScanMem8 (Data + *Offset, 32, 0) == NULL) { return FALSE; }
+-    Length = U32 (Data + *Offset + 32);
+-    *Offset += 36;
+-    if (Length > Size - *Offset) { return FALSE; }
+-    if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "name") == 0) {
+-      if (Name != NULL) { return FALSE; }
+-      Name = Data + *Offset;
+-      NameLength = Length;
+-    }
+-    if ((AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "RAMDisk") == 0) ||
+-        (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "PackedRAMDisk") == 0)) {
+-      if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "PackedRAMDisk") == 0) {
+-        if (*KeepPacked) { return FALSE; }
+-        *KeepPacked = TRUE;
+-      }
+-      if ((Candidate != MAX_UINTN) || (Length != 16)) { return FALSE; }
+-      Candidate = *Offset;
+-    }
+-    if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "TrustCache") == 0) {
+-      if ((TrustCandidate != MAX_UINTN) || (Length != 16)) { return FALSE; }
+-      TrustCandidate = *Offset;
+-    }
+-    if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "darwinboot-memory-size") == 0) {
+-      if ((MemoryCandidate != MAX_UINTN) || (Length != 8)) { return FALSE; }
+-      MemoryCandidate = *Offset;
+-    }
+-    if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "dram-base") == 0) {
+-      if ((DramBaseCandidate != MAX_UINTN) || (Length != 8)) { return FALSE; }
+-      DramBaseCandidate = *Offset;
+-    }
+-    if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "dram-size") == 0) {
+-      if ((DramSizeCandidate != MAX_UINTN) || (Length != 8)) { return FALSE; }
+-      DramSizeCandidate = *Offset;
+-    }
+-    *Offset += Length;
+-    if (ALIGN_VALUE (*Offset, 4) > Size) { return FALSE; }
+-    *Offset = ALIGN_VALUE (*Offset, 4);
+-  }
+-  Path = 3;
+-  if (Depth == 0) { Path = 0; }
+-  if ((Depth == 1) && (ParentPath == 0) && (NameLength == 7) && (CompareMem (Name, "chosen", 7) == 0)) { Path = 1; }
+-  if ((Depth == 2) && (ParentPath == 1) && (NameLength == 11) && (CompareMem (Name, "memory-map", 11) == 0)) { Path = 2; }
+-  if ((Path == 2) && (Candidate != MAX_UINTN)) {
+-    if (*RamdiskOffset != MAX_UINTN) { return FALSE; }
+-    *RamdiskOffset = Candidate;
+-  }
+-  if ((Path == 2) && (TrustCandidate != MAX_UINTN)) {
+-    if (*TrustCacheOffset != MAX_UINTN) { return FALSE; }
+-    *TrustCacheOffset = TrustCandidate;
+-  }
+-  if (DramBaseCandidate != MAX_UINTN) {
+-    if ((Path != 1) || (*DramBaseOffset != MAX_UINTN) || (U64 (Data + DramBaseCandidate) != 0)) { return FALSE; }
+-    *DramBaseOffset = DramBaseCandidate;
+-  }
+-  if (DramSizeCandidate != MAX_UINTN) {
+-    if ((Path != 1) || (*DramSizeOffset != MAX_UINTN) || (U64 (Data + DramSizeCandidate) != 0)) { return FALSE; }
+-    *DramSizeOffset = DramSizeCandidate;
+-  }
+-  if (MemoryCandidate != MAX_UINTN) {
+-    if ((Path != 1) || (*WindowSize != 0)) { return FALSE; }
+-    *WindowSize = U64 (Data + MemoryCandidate);
+-    if (!DarwinWindowSizeValid (*WindowSize)) { return FALSE; }
+-  }
+-  if (Children > (Size - *Offset) / 8) { return FALSE; }
+-  for (Index = 0; Index < Children; Index++) {
+-    if (!AdtNode (Data, Size, Offset, Depth + 1, Path, RamdiskOffset, TrustCacheOffset, WindowSize, KeepPacked, DramBaseOffset, DramSizeOffset)) { return FALSE; }
+-  }
+-  return TRUE;
+-}
+-
+-STATIC
+-BOOLEAN
+-ValidTrustCaches (CONST UINT8 *Data, UINTN Size)
+-{
+-  UINTN Count;
+-  UINTN Index;
+-  UINTN Start;
+-  UINTN End;
+-  UINTN Entries;
+-  UINTN Entry;
+-
+-  if (Size < 8) { return FALSE; }
+-  Count = U32 (Data);
+-  if ((Count == 0) || (Count > 128) || (Count > (Size - 4) / 4)) { return FALSE; }
+-  for (Index = 0; Index < Count; Index++) {
+-    Start = U32 (Data + 4 + Index * 4);
+-    End = (Index + 1 < Count) ? U32 (Data + 8 + Index * 4) : Size;
+-    if ((Start < 4 + Count * 4) || (Start & 3) || (End > Size) ||
+-        (End < Start) || (End - Start < 24) || (U32 (Data + Start) != 2)) { return FALSE; }
+-    Entries = U32 (Data + Start + 20);
+-    if ((Entries > (End - Start - 24) / 24) || (End - Start != 24 + Entries * 24)) { return FALSE; }
+-    for (Entry = 0; Entry < Entries; Entry++) {
+-      CONST UINT8 *Hash = Data + Start + 24 + Entry * 24;
+-      if ((Hash[20] < 1) || (Hash[20] > 4) ||
+-          ((Entry != 0) && (CompareMem (Hash - 24, Hash, 20) >= 0))) { return FALSE; }
+-    }
+-  }
+-  return TRUE;
+ }
+ 
+ STATIC
+@@ -503,6 +283,7 @@
+   )
+ {
+   EFI_STATUS                      Status;
++  CONST CHAR16                    *Stage = L"request";
+   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *Fs;
+   EFI_FILE_PROTOCOL               *Root;
+   VOID                            *Image;
+@@ -530,6 +311,8 @@
+   UINTN                           TrustCacheOffset;
+   UINTN                           DramBaseOffset;
+   UINTN                           DramSizeOffset;
++  UINTN                           SecondaryOffset;
++  UINT64                          SecondaryAddress, PacKeys = 0;
+   UINT64                          TrustCacheAddress;
+   DARWIN_BOOT_ARGS                *Args;
+   EFI_MEMORY_DESCRIPTOR           *Map;
+@@ -539,7 +322,7 @@
+   UINTN                           Stride;
+   UINT32                          Version;
+   UINTN                           Attempt;
+-  CHAR8                           CommandLine[608];
++  CHAR8                           CommandLine[1024];
+   UINT64                          Video[6];
+ 
+   (VOID)This;
+@@ -571,8 +354,10 @@
+   if (EFI_ERROR (Status)) { return Status; }
+   Status = Fs->OpenVolume (Fs, &Root);
+   if (EFI_ERROR (Status)) { return Status; }
++  Stage = L"kernel read";
+   Status = ReadFile (Root, Request->KernelPath, SIZE_128MB, &Image, &ImageSize);
+   if (EFI_ERROR (Status)) { goto Fail; }
++  Stage = L"Mach-O preflight";
+   Status = ParseKernel (Image, ImageSize, &Kernel);
+   if (EFI_ERROR (Status)) { goto Fail; }
+   Length = StrSize (Request->KernelPath);
+@@ -580,16 +365,20 @@
+   if (TreePath == NULL) { Status = EFI_OUT_OF_RESOURCES; goto Fail; }
+   CopyMem (TreePath, Request->KernelPath, Length);
+   StrCatS (TreePath, Length / sizeof (CHAR16) + 11, L".adt");
++  Stage = L"ADT read";
+   Status = ReadFile (Root, TreePath, SIZE_16MB, &Tree, &TreeSize);
+   if (EFI_ERROR (Status)) { goto Fail; }
++  Stage = L"ADT preflight";
+   Offset = 0;
+   RamdiskOffset = MAX_UINTN;
+   TrustCacheOffset = MAX_UINTN;
+   DramBaseOffset = MAX_UINTN;
+   DramSizeOffset = MAX_UINTN;
++  SecondaryOffset = MAX_UINTN;
+   WindowSize = 0;
+   KeepPacked = FALSE;
+-  if (!AdtNode (Tree, TreeSize, &Offset, 0, 3, &RamdiskOffset, &TrustCacheOffset, &WindowSize, &KeepPacked, &DramBaseOffset, &DramSizeOffset) || (Offset != TreeSize) || (DramBaseOffset == MAX_UINTN) || (DramSizeOffset == MAX_UINTN)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
++  if (!AdtNode (Tree, TreeSize, &Offset, 0, 3, &RamdiskOffset, &TrustCacheOffset, &WindowSize, &KeepPacked, &DramBaseOffset, &DramSizeOffset, &SecondaryOffset) || (Offset != TreeSize) || (DramBaseOffset == MAX_UINTN) || (DramSizeOffset == MAX_UINTN) || (SecondaryOffset == MAX_UINTN)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
++  Stage = L"optional GPU handoff";
+   Status = DarwinGpuBindPowerHandoff (Tree, TreeSize);
+   if (EFI_ERROR (Status)) { goto Fail; }
+   if (KeepPacked && (!RamdiskPacked || (RamdiskOffset == MAX_UINTN))) { Status = EFI_COMPROMISED_DATA; goto Fail; }
+@@ -616,23 +405,31 @@
+     Status = EFI_COMPROMISED_DATA;
+     goto Fail;
+   }
++  Stage = L"framebuffer handoff";
+   Status = ReadBootVideo (Video);
+   if (EFI_ERROR (Status)) { goto Fail; }
++  Stage = L"owned memory allocation";
+   Status = AllocateWindow (&Kernel, WindowSize, &Address);
+   if (EFI_ERROR (Status)) { goto Fail; }
+ #if defined (HOUJI_LOW_UEFI_ALLOCS)
++  Stage = L"owned memory verification";
+   Status = VerifyHighWindow (Address, WindowSize);
+   if (EFI_ERROR (Status)) { goto Fail; }
+ #endif
+-  Status = DarwinPrepareZapHandoff (Tree, TreeSize, Address, WindowSize);
+-  Print (L"HOUJI ZAP HANDOFF: ready=%u code=%u metadata=%lx raw=%lx retained=%u status=%r\n", mHzrLoader.ready, mHzrLoader.code, mHzrLoader.metadata, mHzrLoader.raw, mHzrLoader.raw_retained, Status);
+-  if (EFI_ERROR (Status)) { goto Fail; }
++  UINTN ZapSlot = 0;
++  if (hzr_adt_find(Tree, TreeSize, &ZapSlot)) {
++    Status = DarwinPrepareZapHandoff (Tree, TreeSize, Address, WindowSize);
++    if (EFI_ERROR(Status)) { goto Fail; }
++  } else if (AsciiStrStr(CommandLine, "houji_gpu_") != NULL) {
++    Status = EFI_COMPROMISED_DATA; goto Fail;
++  }
+   ArgsAddress = ALIGN_VALUE (Address + Kernel.End - Kernel.Base, SIZE_16KB);
+   TreeAddress = ArgsAddress + SIZE_16KB;
+   RamdiskAddress = ALIGN_VALUE (TreeAddress + TreeSize, SIZE_16KB);
+   RamdiskBytes = ALIGN_VALUE (KeepPacked ? Request->RamdiskSize : RamdiskExpandedSize, SIZE_16KB);
+   TrustCacheAddress = RamdiskAddress + RamdiskBytes;
+-  Used = ALIGN_VALUE (TrustCacheAddress + TrustCacheSize, SIZE_16KB) - Address;
++  SecondaryAddress = ALIGN_VALUE (TrustCacheAddress + TrustCacheSize, SIZE_16KB);
++  Used = SecondaryAddress + SIZE_16KB - Address;
+   if (Used > WindowSize - BLOCK_SIZE) { Status = EFI_BAD_BUFFER_SIZE; goto Fail; }
+   ZeroMem ((VOID *)(UINTN)Address, (UINTN)Used);
+   for (Index = 0; Index < Kernel.Count; Index++) {
+@@ -667,10 +464,18 @@
+     WriteUnaligned64 ((UINT64 *)(UINTN)(TreeAddress + TrustCacheOffset + 8), TrustCacheSize);
+     FreePool (TrustCaches); TrustCaches = NULL;
+   }
++  Stage = L"PAC setup";
++  Status = DarwinPreparePac(Image, ImageSize, Kernel.Base, Address, WindowSize, &PacKeys);
++  if (EFI_ERROR(Status)) { goto Fail; }
++  Stage = L"secondary PAC trampoline";
++  Status = DarwinPrepareSecondaryPac(SecondaryAddress, PacKeys);
++  if (EFI_ERROR(Status)) { goto Fail; }
++  WriteUnaligned64((UINT64 *)(UINTN)(TreeAddress + SecondaryOffset), SecondaryAddress);
+   FreePool (Image); Image = NULL;
+   FreePool (Tree); Tree = NULL;
+   FreePool (TreePath); TreePath = NULL;
+   Root->Close (Root); Root = NULL;
++  Stage = L"firmware memory map";
+   Status = GetMap (&Map, &Capacity, &MapSize, &Key, &Stride);
+   if (EFI_ERROR (Status)) { goto Fail; }
+   Print (L"DARWINBOOT: ARM64 va=0x%lx pa=0x%lx args=0x%lx entry=0x%lx owned=0x%lx\n",
+@@ -708,7 +513,7 @@
+     }
+     Status = gBS->ExitBootServices (mImage, Key);
+     if (!EFI_ERROR (Status)) {
+-      DarwinEnter (ArgsAddress, Address + Kernel.Entry - Kernel.Base, Address, WindowSize, Video[0], Video[2] * Video[4]);
++      DarwinEnter (ArgsAddress, Address + Kernel.Entry - Kernel.Base, Address, WindowSize, Video[0], Video[2] * Video[4], PacKeys);
+       CpuDeadLoop ();
+     }
+     if (Status != EFI_INVALID_PARAMETER) { CpuDeadLoop (); }
+@@ -723,7 +528,10 @@
+   if (TreePath != NULL) { FreePool (TreePath); }
+   if (Map != NULL) { FreePool (Map); }
+   if (Address != 0) { gBS->FreePages (Address, EFI_SIZE_TO_PAGES (WindowSize)); }
+-  Print (L"DARWINBOOT: boot refused: %r; firmware retained\n", Status);
++  Print (L"HOUJI26: %s failed: %r; kernel not entered\n", Stage, Status);
++  CHAR16 Failure[192];
++  UnicodeSPrint(Failure, sizeof(Failure), L"HOUJI26 %s: %r", Stage, Status);
++  DiagDraw(Failure, 0);
+   return Status;
+ }
+ 
+--- a/DarwinBootPkg/Driver/DarwinBoot.inf
++++ b/DarwinBootPkg/Driver/DarwinBoot.inf
+@@ -10,6 +10,9 @@
+ [Sources]
+   DarwinBoot.c
+   PackedRamdisk.h
++  DarwinPac.h
++  DarwinBootImage.h
++  DarwinPacFixups.h
+   BootArgs.h
+   BootVideo.h
+   OwnedMemoryTest.h
+@@ -48,6 +51,7 @@
+   gEfiSimpleFileSystemProtocolGuid ## CONSUMES
+   gEfiLoadedImageProtocolGuid ## CONSUMES
+   gEfiGraphicsOutputProtocolGuid ## CONSUMES
++  gEfiRngProtocolGuid ## CONSUMES
+ 
+ [Guids]
+   gEfiFileInfoGuid

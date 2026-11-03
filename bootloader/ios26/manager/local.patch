@@ -1,0 +1,79 @@
+--- a/package/UniXNUPkg/Library/UniXNULib/Internal.h
++++ b/package/UniXNUPkg/Library/UniXNULib/Internal.h
+@@ -255,6 +255,8 @@
+   UINTN          DefaultIndex;
+   UINTN          RotateSeconds;    ///< Idle highlight rotation step, 0 = off.
+   UINTN          FallbackTimeout;  ///< Used when Timeout < 0 and no input exists.
++  BOOLEAN        ResetOnReturn;    ///< Explicit one-attempt boot profile.
++  UINTN          ReturnTimeout;    ///< Error visibility before reset, 1..30 seconds.
+   BOOLEAN        ConnectAll;       ///< ConnectController all handles after drivers.
+   //
+   // [ui]
+--- a/package/UniXNUPkg/Library/UniXNULib/Config.c
++++ b/package/UniXNUPkg/Library/UniXNULib/Config.c
+@@ -8,6 +8,7 @@
+ **/
+ 
+ #include "Internal.h"
++#include "ReturnPolicy.h"
+ 
+ #include <Library/FdtLib.h>
+ 
+@@ -1382,6 +1383,10 @@
+   Config->RotateSeconds   = (UINTN)MAX (0, TomlGetInteger (Boot, "rotate", 0));
+   Config->FallbackTimeout = (UINTN)MAX (1, TomlGetInteger (Boot, "fallback_timeout", 10));
+   Config->ConnectAll      = TomlGetBoolean (Boot, "connect_all", TRUE);
++  if (!UniXNUParseReturnPolicy(TomlGetString(Boot, "on_return", "menu"),
++        TomlGetInteger(Boot, "return_timeout", 10), &Config->ResetOnReturn, &Config->ReturnTimeout)) {
++    ConfigError(Config, "[boot] on_return must be menu/reset and return_timeout 1..30 seconds");
++  }
+ 
+   Ui              = TomlGet (Root, "ui");
+   Config->Title   = UniXNUAsciiToUnicode (TomlGetString (Ui, "title", "UniXNU"));
+--- a/package/UniXNUPkg/Library/UniXNULib/Main.c
++++ b/package/UniXNUPkg/Library/UniXNULib/Main.c
+@@ -6,6 +6,7 @@
+ **/
+ 
+ #include "Internal.h"
++#include "ReturnPolicy.h"
+ 
+ #include <Protocol/SerialIo.h>
+ 
+@@ -44,6 +45,14 @@
+     Size = AsciiStrLen (Line);
+     mSerial->Write (mSerial, &Size, Line);
+   }
++}
++
++STATIC VOID
++DrawReturnedBoot(VOID *Context, EFI_STATUS Status, UINTN Seconds)
++{
++  CHAR16 Line[192];
++  UnicodeSPrint(Line, sizeof(Line), L"Boot returned: %r. Reset in %u s", Status, (UINT32)Seconds);
++  UniXNUUiDrawStatus((UNIXNU_UI *)Context, 0, Line);
+ }
+ 
+ EFI_STATUS
+@@ -157,6 +166,11 @@
+     UnicodeSPrint (Ui.Notice, sizeof (Ui.Notice), L"'%s' returned: %r", Entry->Title, Status);
+     UniXNULog ("menu: entry %u returned %r", (UINT32)Index, Status);
+     gBS->SetWatchdogTimer (0, 0, 0, NULL);
++    if (Config.ResetOnReturn) {
++      // The host has prearmed the Recovery BCB. Preserve the loader's failure
++      // drawing and report status once; a rejected image is never retried.
++      return UniXNUResetAfterReturn(Config.ReturnTimeout, Status, DrawReturnedBoot, &Ui);
++    }
+     Countdown = FALSE;
+   }
+ }
+--- a/package/UniXNUPkg/Library/UniXNULib/UniXNULib.inf
++++ b/package/UniXNUPkg/Library/UniXNULib/UniXNULib.inf
+@@ -22,6 +22,7 @@
+   Kext.c
+   Logo.c
+   Main.c
++  ReturnPolicy.h
+   Menu.c
+   Slice.c
+   Toml.c

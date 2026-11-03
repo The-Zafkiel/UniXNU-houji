@@ -3,7 +3,7 @@
   "board": "houji",
   "soc": "SM8650",
   "gpu": "Adreno 750",
-  "status": "preparation",
+  "status": "uefi-first-entry-blocked-offline-work",
   "hardware_boot_verified": false,
   "userland": {
     "architecture": "arm64e",
@@ -45,5 +45,14 @@
     "userland": "16.7.16 / 20H392",
     "kernel": "xnu-8796.141.3",
     "board_configuration": "board.toml"
-  }
+  },
+  "kernel": {
+    "tag": "xnu-12377.121.6",
+    "architecture": "arm64e",
+    "CPU_pages": 16384,
+    "machine": "HOUJI",
+    "hardware_boot_verified": false,
+    "darwin_version": "25.6.0"
+  },
+  "testing_paused_by_user": true
 }

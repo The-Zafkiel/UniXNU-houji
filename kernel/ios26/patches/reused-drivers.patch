@@ -1,0 +1,31 @@
+--- a/iokit/Kernel/houji-ufs-root/Adreno740/HoujiNativeAccelerator.cpp
++++ b/iokit/Kernel/houji-ufs-root/Adreno740/HoujiNativeAccelerator.cpp
+@@ -8,8 +8,7 @@
+ #include <IOKit/IOPlatformExpert.h>
+ #include <IOKit/IOUserClient.h>
+ #include <libkern/c++/OSSymbol.h>
+-class IOAcceleratorES:public IOService{OSDeclareDefaultStructors(IOAcceleratorES)};
+-OSDefineMetaClassAndStructors(IOAcceleratorES,IOService)
++#include "../../HoujiIOAccelerator26.h"
+ extern "C" IOReturn native_adreno_new_user_client(IOService*,task_t,void*,UInt32,OSDictionary*,IOUserClient**,unsigned);
+ extern "C" void native_adreno_note_property_read(const char*);
+ class AGXAccelerator:public IOAcceleratorES{
+--- a/iokit/Kernel/houji-ufs-root/HoujiUfsRead.cpp
++++ b/iokit/Kernel/houji-ufs-root/HoujiUfsRead.cpp
+@@ -605,9 +605,13 @@
+     rootDiagnosticFailure("root HFSX geometry/volume ID does not match installed image");
+   gRootWindowLock=IOLockAlloc();gRootBounce=static_cast<uint8_t *>(IOMalloc(131072));
+   if(!gRootWindowLock || !gRootBounce)rootDiagnosticFailure("root buffer allocation");
+-  static const struct mdev_ops ops={nativeRootTransfer,nativeRootSynchronize};
+-  dev_t device=mdevadd_ops(0,kHoujiRootBytes,&ops,nullptr);
+-  if(device==(dev_t)-1)rootDiagnosticFailure("native block registration");
++  int ramRoot=0;
++  PE_parse_boot_argn("houji_root_ram",&ramRoot,sizeof(ramRoot));
++  if (ramRoot != 1) {
++    static const struct mdev_ops ops={nativeRootTransfer,nativeRootSynchronize};
++    dev_t device=mdevadd_ops(0,kHoujiRootBytes,&ops,nullptr);
++    if(device==(dev_t)-1)rootDiagnosticFailure("native block registration");
++  }
+   gRootArmed=true;attached=true;
+   IOLog("HOUJI ROOT: md0 is native UFS LUN0 [%u,%u), bytes=%llu; no RAM root backing\n",
+         kHoujiRootFirst,kHoujiRootFirst+kHoujiRootBlocks,kHoujiRootBytes);

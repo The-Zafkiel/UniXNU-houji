@@ -1,5 +1,8 @@
 # 开发指南
 
+`codex/houji-ios26` 的目标准备和镜像校验见 [iOS26 准备](ios26-bringup.md)。
+本页现有内核、板级配置及图形构建命令仍对应保留的 iOS16 基线，不能直接生成 iOS26 系统。
+
 ## 环境与输入
 
 已使用的主机环境是 Apple Silicon macOS、Xcode 27.2、Python 3.12 或更新版本、Clang，以及 Rust 1.98.0 的 `aarch64-apple-ios` 目标。UEFI 使用 Linux 容器构建。Mesa 还需要 Meson、Ninja、支持 `-Wcounterexamples` 的 Bison 3.8 或更新版，以及 Mako/PyYAML 等 Python 构建依赖；不要让 macOS 自带旧 Bison 遮盖它。

@@ -4,11 +4,15 @@
 
 **小米 14 的原生 iOS 移植**
 
-Snapdragon 8 Gen 3 · Adreno 750 · Darwin 22
+Snapdragon 8 Gen 3 · Adreno 750 · iOS26 准备分支
 
 [功能状态](#功能状态) · [性能修复](docs/performance.md) · [待完成项](docs/roadmap.md) · [开发指南](docs/development.md) · [代码结构](docs/architecture.md) · [问题反馈](https://github.com/lonzzi/UniXNU-houji/issues)
 
 </div>
+
+本分支 `codex/houji-ios26` 正在准备 **iOS 26.6.2 / 23G90、arm64e**，参考小米 15
+的 hakios-arm64e-dada。镜像清单、校验入口和迁移边界见 [iOS26 准备](docs/ios26-bringup.md)。
+**尚未完成 iOS26 构建或实机启动。** 下文功能表及现有构建入口记录保留的 iOS16 基线。
 
 基于 [UniXNU](https://github.com/UniXNU/UniXNU) 生态，为小米 14（`houji`）适配 UEFI、XNU 内核、硬件驱动及 iOS 用户空间。目前已经能够进入 iOS 桌面，使用原生分辨率显示、触控、八核 CPU 和实验性的 Adreno 图形加速。
 

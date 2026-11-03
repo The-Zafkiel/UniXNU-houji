@@ -1,6 +1,9 @@
 # 代码结构与运行路径
 
-本仓库维护小米 14 的 Darwin 22 / iOS 16 路径。它与最新 UniXNU 的板级模块格式并非完全相同；不要将其他 SoC 的设备树、内存地址、频点或 MMIO 写入直接用于 houji。
+本分支开始准备小米 14 的 iOS26 / arm64e 路径，目标与迁移状态见
+[iOS26 准备](ios26-bringup.md)及 `targets/ios26.json`。下文是保留的 Darwin 22 /
+iOS16 实现，尚未迁移为 XNU12377。它与最新 UniXNU 的板级模块格式并非完全相同；
+不要将其他 SoC 的设备树、内存地址、频点或 MMIO 写入直接用于 houji。
 
 ## 系统组成
 

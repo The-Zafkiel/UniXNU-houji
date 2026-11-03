@@ -2,6 +2,14 @@
   "format": 1,
   "target": "houji",
   "validated_build": "r222",
+  "ios26_preparation": {
+    "target_manifest": "targets/ios26.json",
+    "status": "preparation",
+    "hardware_boot_verified": false,
+    "existing_components": "Retained iOS16 baseline; not yet rebased to XNU12377",
+    "reference_repository": "https://github.com/superboyyy/hakios-arm64e-dada",
+    "reference_revision": "f1ae906fcc43ba8f763663257724ba938fb820ab"
+  },
   "components": {
     "kernel": {
       "repository": "https://github.com/apple-oss-distributions/xnu.git",

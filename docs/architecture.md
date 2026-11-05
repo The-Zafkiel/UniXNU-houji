@@ -1,8 +1,10 @@
 # 代码结构与运行路径
 
 本分支正在迁移小米 14 的 iOS26 / arm64e 内核与启动链，目标与迁移状态见
-[iOS26 迁移](ios26-bringup.md)及 `targets/ios26.json`。下文是保留的 Darwin 22 /
-iOS16 实现，尚未迁移为 XNU12377。它与最新 UniXNU 的板级模块格式并非完全相同；
+[iOS26 迁移](ios26-bringup.md)及 `targets/ios26.json`。XNU12377 与最小 arm64e PID1
+已经实机运行；完整系统卷及图形栈已离线构建，桌面和 GPU 仍待实机验证。
+下文描述保留的 Darwin 22 / iOS16 实现，其功能状态不能直接当作 iOS26 的验证结果。
+它与最新 UniXNU 的板级模块格式并非完全相同；
 不要将其他 SoC 的设备树、内存地址、频点或 MMIO 写入直接用于 houji。
 
 ## 系统组成

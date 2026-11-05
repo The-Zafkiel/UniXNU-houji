@@ -465,7 +465,7 @@
   },
   "ios26": {
     "target_manifest": "targets/ios26.json",
-    "status": "native-arm64e-pid1-verified-full-system-in-progress",
+    "status": "native-arm64e-pid1-verified-offline-root-and-graphics-built",
     "hardware_boot_verified": true,
     "reference": {
       "repository": "https://github.com/superboyyy/hakios-arm64e-dada",
@@ -514,10 +514,12 @@
       "ios26_apps_helper_arm64e_build": true,
       "bridge_and_std_arm64e_build": true,
       "arm64e_turnip_build": true,
-      "arm64e_metal_bundle_build": true
+      "arm64e_metal_bundle_build": true,
+      "full_root_image_assembly": true,
+      "full_root_hfs_check": true
     },
     "not_yet_qualified": [
-      "full iOS26 root/userland and desktop",
+      "full iOS26 root boot, userland runtime and desktop",
       "GPU submission/presentation and refresh on houji",
       "multicore scheduler",
       "brightness/touch/battery and app runtime on iOS26"
@@ -529,7 +531,7 @@
       "scope": "Explicit one-attempt profile; bounded on_return reset; original menu behavior remains default",
       "overlay": "bootloader/ios26/manager/overlay"
     },
-    "testing_paused_by_user": false,
+    "testing_paused_by_user": true,
     "latest_device_result": {
       "kernel_entry_verified": true,
       "user_entry_verified": true,
@@ -629,8 +631,20 @@
       "donor_build": "23G90",
       "host_helper_build_verified": true,
       "runtime_collectors": false,
-      "root_image_verified": false,
-      "hardware_verified": false
+      "root_image_verified": true,
+      "hardware_verified": false,
+      "root_image_verification": {
+        "scope": "Local image assembly and filesystem only; not installed or hardware verified",
+        "bytes": 34359738368,
+        "sha256": "79540c8a19dcc9fa0c1961283e6966ad908166d6ebdb5edfe3d1b8228f5319a2",
+        "verified_donor_entries": 462899,
+        "free_bytes": 12469788672,
+        "launchd_jobs": 548,
+        "filesystem_check": "PASS",
+        "data_mode": "fresh ramfs template; persistence not yet qualified",
+        "installed": false,
+        "phone_accessed": false
+      }
     }
   }
 }

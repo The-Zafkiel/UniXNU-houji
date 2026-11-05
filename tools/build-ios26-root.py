@@ -242,7 +242,8 @@ def main():
         # explicitly replaced paths are checked independently below.
         verified = 0
         skip = ('sbin/launchd', 'System/Library/LaunchDaemons', 'System/Library/NanoLaunchDaemons',
-                'System/Library/LaunchAngels', 'System/Library/xpc/launchd.plist', 'private/var/staged_system_apps')
+                'System/Library/LaunchAngels', 'System/Library/xpc/launchd.plist', 'private/var/staged_system_apps',
+                'System/Cryptexes/OS', 'System/Cryptexes/App', 'private/preboot/Cryptexes/ExclaveOS')
         for source, target, exclusions in [(a.system_root, mount, skip),
                 (a.cryptex_os, mount / 'System/Cryptexes/OS', ()),
                 (a.cryptex_app, mount / 'System/Cryptexes/App', ()),

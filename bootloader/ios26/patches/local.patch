@@ -40,7 +40,7 @@
  
  STATIC
  EFI_STATUS
-@@ -138,210 +122,6 @@
+@@ -138,213 +122,9 @@
    File->Close (File);
    if (EFI_ERROR (Status) && (*Data != NULL)) { FreePool (*Data); *Data = NULL; }
    return Status;
@@ -218,9 +218,9 @@
 -    if (!AdtNode (Data, Size, Offset, Depth + 1, Path, RamdiskOffset, TrustCacheOffset, WindowSize, KeepPacked, DramBaseOffset, DramSizeOffset)) { return FALSE; }
 -  }
 -  return TRUE;
--}
--
--STATIC
+ }
+ 
+ STATIC
 -BOOLEAN
 -ValidTrustCaches (CONST UINT8 *Data, UINTN Size)
 -{
@@ -248,9 +248,12 @@
 -    }
 -  }
 -  return TRUE;
- }
- 
- STATIC
+-}
+-
+-STATIC
+ EFI_STATUS
+ GetMap (EFI_MEMORY_DESCRIPTOR **Map, UINTN *Capacity, UINTN *Size, UINTN *Key, UINTN *Stride)
+ {
 @@ -503,6 +283,7 @@
    )
  {
@@ -259,16 +262,18 @@
    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *Fs;
    EFI_FILE_PROTOCOL               *Root;
    VOID                            *Image;
-@@ -530,6 +311,8 @@
+@@ -530,6 +311,10 @@
    UINTN                           TrustCacheOffset;
    UINTN                           DramBaseOffset;
    UINTN                           DramSizeOffset;
 +  UINTN                           SecondaryOffset;
++  UINTN                           PacEntropyOffset = MAX_UINTN;
++  UINT8                           TrialEntropy[DARWIN_PAC_ENTROPY_BYTES] = {0};
 +  UINT64                          SecondaryAddress, PacKeys = 0;
    UINT64                          TrustCacheAddress;
    DARWIN_BOOT_ARGS                *Args;
    EFI_MEMORY_DESCRIPTOR           *Map;
-@@ -539,7 +322,7 @@
+@@ -539,7 +324,7 @@
    UINTN                           Stride;
    UINT32                          Version;
    UINTN                           Attempt;
@@ -277,7 +282,7 @@
    UINT64                          Video[6];
  
    (VOID)This;
-@@ -571,8 +354,10 @@
+@@ -571,8 +356,10 @@
    if (EFI_ERROR (Status)) { return Status; }
    Status = Fs->OpenVolume (Fs, &Root);
    if (EFI_ERROR (Status)) { return Status; }
@@ -288,7 +293,7 @@
    Status = ParseKernel (Image, ImageSize, &Kernel);
    if (EFI_ERROR (Status)) { goto Fail; }
    Length = StrSize (Request->KernelPath);
-@@ -580,16 +365,20 @@
+@@ -580,16 +367,25 @@
    if (TreePath == NULL) { Status = EFI_OUT_OF_RESOURCES; goto Fail; }
    CopyMem (TreePath, Request->KernelPath, Length);
    StrCatS (TreePath, Length / sizeof (CHAR16) + 11, L".adt");
@@ -305,18 +310,25 @@
    WindowSize = 0;
    KeepPacked = FALSE;
 -  if (!AdtNode (Tree, TreeSize, &Offset, 0, 3, &RamdiskOffset, &TrustCacheOffset, &WindowSize, &KeepPacked, &DramBaseOffset, &DramSizeOffset) || (Offset != TreeSize) || (DramBaseOffset == MAX_UINTN) || (DramSizeOffset == MAX_UINTN)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
-+  if (!AdtNode (Tree, TreeSize, &Offset, 0, 3, &RamdiskOffset, &TrustCacheOffset, &WindowSize, &KeepPacked, &DramBaseOffset, &DramSizeOffset, &SecondaryOffset) || (Offset != TreeSize) || (DramBaseOffset == MAX_UINTN) || (DramSizeOffset == MAX_UINTN) || (SecondaryOffset == MAX_UINTN)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
++  if (!AdtNode (Tree, TreeSize, &Offset, 0, 3, &RamdiskOffset, &TrustCacheOffset, &WindowSize, &KeepPacked, &DramBaseOffset, &DramSizeOffset, &SecondaryOffset, &PacEntropyOffset) || (Offset != TreeSize) || (DramBaseOffset == MAX_UINTN) || (DramSizeOffset == MAX_UINTN) || (SecondaryOffset == MAX_UINTN)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
++  if (PacEntropyOffset != MAX_UINTN) {
++    CopyMem(TrialEntropy, (UINT8 *)Tree + PacEntropyOffset, sizeof(TrialEntropy));
++    // Do not publish the entropy property contents in the kernel's ADT.
++    DarwinPacErase((UINT8 *)Tree + PacEntropyOffset, sizeof(TrialEntropy));
++  }
 +  Stage = L"optional GPU handoff";
    Status = DarwinGpuBindPowerHandoff (Tree, TreeSize);
    if (EFI_ERROR (Status)) { goto Fail; }
    if (KeepPacked && (!RamdiskPacked || (RamdiskOffset == MAX_UINTN))) { Status = EFI_COMPROMISED_DATA; goto Fail; }
-@@ -616,23 +405,31 @@
+@@ -616,23 +412,33 @@
      Status = EFI_COMPROMISED_DATA;
      goto Fail;
    }
 +  Stage = L"framebuffer handoff";
    Status = ReadBootVideo (Video);
    if (EFI_ERROR (Status)) { goto Fail; }
++  // XNU chooses text/graphics console from Boot_Video.v_display.
++  if (DarwinBootVerbose(CommandLine)) Video[1] = 0;
 +  Stage = L"owned memory allocation";
    Status = AllocateWindow (&Kernel, WindowSize, &Address);
    if (EFI_ERROR (Status)) { goto Fail; }
@@ -346,18 +358,22 @@
    if (Used > WindowSize - BLOCK_SIZE) { Status = EFI_BAD_BUFFER_SIZE; goto Fail; }
    ZeroMem ((VOID *)(UINTN)Address, (UINTN)Used);
    for (Index = 0; Index < Kernel.Count; Index++) {
-@@ -667,10 +464,18 @@
+@@ -667,10 +473,22 @@
      WriteUnaligned64 ((UINT64 *)(UINTN)(TreeAddress + TrustCacheOffset + 8), TrustCacheSize);
      FreePool (TrustCaches); TrustCaches = NULL;
    }
 +  Stage = L"PAC setup";
-+  Status = DarwinPreparePac(Image, ImageSize, Kernel.Base, Address, WindowSize, &PacKeys);
++  Status = DarwinPreparePac(Image, ImageSize, Kernel.Base, Address, WindowSize,
++    PacEntropyOffset == MAX_UINTN ? NULL : TrialEntropy,
++    PacEntropyOffset == MAX_UINTN ? 0 : sizeof(TrialEntropy), &PacKeys);
++  DarwinPacErase(TrialEntropy, sizeof(TrialEntropy));
 +  if (EFI_ERROR(Status)) { goto Fail; }
 +  Stage = L"secondary PAC trampoline";
 +  Status = DarwinPrepareSecondaryPac(SecondaryAddress, PacKeys);
 +  if (EFI_ERROR(Status)) { goto Fail; }
 +  WriteUnaligned64((UINT64 *)(UINTN)(TreeAddress + SecondaryOffset), SecondaryAddress);
    FreePool (Image); Image = NULL;
++  DarwinPacErase(Tree, TreeSize);
    FreePool (Tree); Tree = NULL;
    FreePool (TreePath); TreePath = NULL;
    Root->Close (Root); Root = NULL;
@@ -365,7 +381,16 @@
    Status = GetMap (&Map, &Capacity, &MapSize, &Key, &Stride);
    if (EFI_ERROR (Status)) { goto Fail; }
    Print (L"DARWINBOOT: ARM64 va=0x%lx pa=0x%lx args=0x%lx entry=0x%lx owned=0x%lx\n",
-@@ -708,7 +513,7 @@
+@@ -698,7 +516,7 @@
+   DEBUG ((DEBUG_ERROR, "ID_AA64MMFR0_EL1 0x%lx  (PARange %lu, 4 KiB granule %a)\n", READ_SYSREG (id_aa64mmfr0_el1),
+           READ_SYSREG (id_aa64mmfr0_el1) & 0xF, (((READ_SYSREG (id_aa64mmfr0_el1) >> 28) & 0xF) == 0xF) ? "NOT supported" : "supported"));
+   DEBUG ((DEBUG_ERROR, "ID_AA64PFR0_EL1  0x%lx\n", READ_SYSREG (id_aa64pfr0_el1)));
+-  DEBUG ((DEBUG_ERROR, "\nExiting boot services. A green bar across the top\nmeans the kernel entry code ran.\n"));
++  DEBUG ((DEBUG_ERROR, "\nExiting boot services. A green bar across the top\nmeans the loader handoff assembly ran.\n"));
+   for (Attempt = 0; Attempt < 3; Attempt++) {
+     MapSize = Capacity;
+     Status = gBS->GetMemoryMap (&MapSize, Map, &Key, &Stride, &Version);
+@@ -708,7 +526,7 @@
      }
      Status = gBS->ExitBootServices (mImage, Key);
      if (!EFI_ERROR (Status)) {
@@ -374,7 +399,16 @@
        CpuDeadLoop ();
      }
      if (Status != EFI_INVALID_PARAMETER) { CpuDeadLoop (); }
-@@ -723,7 +528,10 @@
+@@ -716,14 +534,18 @@
+   CpuDeadLoop ();
+   return EFI_ABORTED;
+ Fail:
++  DarwinPacErase(TrialEntropy, sizeof(TrialEntropy));
+   if (Root != NULL) { Root->Close (Root); }
+   if (Image != NULL) { FreePool (Image); }
+-  if (Tree != NULL) { FreePool (Tree); }
++  if (Tree != NULL) { DarwinPacErase(Tree, TreeSize); FreePool (Tree); }
+   if (TrustCaches != NULL) { FreePool (TrustCaches); }
    if (TreePath != NULL) { FreePool (TreePath); }
    if (Map != NULL) { FreePool (Map); }
    if (Address != 0) { gBS->FreePages (Address, EFI_SIZE_TO_PAGES (WindowSize)); }
@@ -388,17 +422,18 @@
  
 --- a/DarwinBootPkg/Driver/DarwinBoot.inf
 +++ b/DarwinBootPkg/Driver/DarwinBoot.inf
-@@ -10,6 +10,9 @@
+@@ -10,6 +10,10 @@
  [Sources]
    DarwinBoot.c
    PackedRamdisk.h
 +  DarwinPac.h
++  DarwinPacEntropy.h
 +  DarwinBootImage.h
 +  DarwinPacFixups.h
    BootArgs.h
    BootVideo.h
    OwnedMemoryTest.h
-@@ -48,6 +51,7 @@
+@@ -48,6 +52,7 @@
    gEfiSimpleFileSystemProtocolGuid ## CONSUMES
    gEfiLoadedImageProtocolGuid ## CONSUMES
    gEfiGraphicsOutputProtocolGuid ## CONSUMES

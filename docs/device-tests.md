@@ -1120,3 +1120,23 @@ secure-CX 启动资格检查明确要求该位为 1；external-canary 在此前�
 内存窗口、HFS715/原生根设备入口、A750 帧 fence/缓存维护以及 arm64e Rust bridge/std。
 新版本没有在手机上启动。完整 iOS26 用户空间和图形栈接入仍未完成；不得将主机
 检查、静态认证指令计数或 CPU framebuffer 计数作为桌面/高刷/渲染正确性的证据。
+
+
+## iOS26 arm64e 最小启动 · 2026-11-06
+
+在独立 iOS26 分支，通过 `fastboot boot` 临时运行单核、2 GiB owned RAM、静态 PID1
+镜像。运行期日志搜集器关闭，没有物理根卷或 GPU 请求。启动前保存并回读核实
+无 wipe 的 Recovery BCB；reserved/A-B 字节保持原样，没有刷写 boot 或 GPT。
+
+用户屏幕照片逐步确认：
+
+- 2 GiB 两轮完整写入/flush/读回通过，但 PAC 随机源缺失返回 Not Ready。
+- 一次性独立 host CSPRNG 材料接入后，PAC 硬件验证和 authenticated/rebase 修复完成；
+  副核 trampoline 的 COFF 段重排导致长度检查失败。
+- 同段标签修复后成功退出 UEFI，执行交接汇编；自动返回 Recovery。
+- 文本显示交接修复后，画面明确显示 Darwin 25.6.0、GIC/VM/IOKit/HFS 初始化、
+  mockfs RAM root 和 `HOUJI IOS26 ARM64E PID1 REACHED`。
+
+这是内核与最小 arm64e 用户进程的实际启动证据，不包含完整 iOS26 桌面、GPU、
+多核、触摸、电池、亮度交互或高刷新率验收。照片、测试镜像与一次性随机材料留在
+本地私有目录；仅发布源码、主机检查和上述结果边界。

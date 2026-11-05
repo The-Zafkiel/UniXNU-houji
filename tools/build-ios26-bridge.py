@@ -105,6 +105,9 @@ def main():
         'compiler': version, 'target_sha256': pin['target_sha256'], 'runtime_revision': origin['revision'],
         'runtime_source_id': source_id, 'runtime_id': runtime_id,
         'archive_sha256': digest(archive), 'std_rebuilt': True, 'sha2_assembly': False,
+        'authored_air_sha256': {'fixture': digest(args.fixture_air),
+                               'function_constant': digest(args.function_constant_air),
+                               'scanout': digest(args.scanout_air)},
         'machine_code': counts, 'device_accessed': False, 'installed': False,
     }, indent=2) + '\n')
     print('Built PAC-enabled arm64e bridge and std; no device or GPU qualification')

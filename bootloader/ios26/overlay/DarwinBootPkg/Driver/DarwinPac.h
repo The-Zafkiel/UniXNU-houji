@@ -3,10 +3,12 @@
 #define DARWIN_PAC_H
 #include <Protocol/Rng.h>
 #include "DarwinPacFixups.h"
+#include "DarwinPacEntropy.h"
 
 extern UINT8 DarwinSecondaryPacStart[], DarwinSecondaryPacEnd[], DarwinSecondaryPacKeysAddress[];
 
-STATIC BOOLEAN DarwinPacEntropy(UINT64 Keys[10]) {
+STATIC BOOLEAN DarwinPacHardwareEntropy(VOID *Cookie, UINT8 *Keys) {
+  (VOID)Cookie;
   EFI_RNG_PROTOCOL *Rng = NULL;
   EFI_STATUS Status = gBS->LocateProtocol(&gEfiRngProtocolGuid, NULL, (VOID **)&Rng);
   if (!EFI_ERROR(Status) && Rng && !EFI_ERROR(Rng->GetRNG(Rng, NULL, 80, (UINT8 *)Keys)))
@@ -23,7 +25,7 @@ STATIC BOOLEAN DarwinPacEntropy(UINT64 Keys[10]) {
       if (!Ready) CpuPause();
     }
     if (!Ready) { ZeroMem(Keys, 80); return FALSE; }
-    Keys[Index] = Value;
+    CopyMem(Keys + Index * sizeof(Value), &Value, sizeof(Value));
   }
   return TRUE;
 }
@@ -64,7 +66,8 @@ STATIC int DarwinPacSign(void *Cookie, DpaU64 Target, DpaU64 Modifier, DpaU32 Ke
 }
 
 STATIC EFI_STATUS DarwinPreparePac(CONST VOID *File, UINTN FileSize, UINT64 VirtualBase,
-    UINT64 PhysicalBase, UINT64 WindowBytes, UINT64 *KeysPhysical) {
+    UINT64 PhysicalBase, UINT64 WindowBytes, UINT8 *TrialEntropy, UINTN TrialBytes,
+    UINT64 *KeysPhysical) {
   DpaReport Report;
   int Code = DpaProcess(File, FileSize, VirtualBase, WindowBytes, NULL, NULL, NULL, &Report);
   if (Code != DPA_OK) {
@@ -78,7 +81,11 @@ STATIC EFI_STATUS DarwinPreparePac(CONST VOID *File, UINTN FileSize, UINT64 Virt
   if (!AddressPac || !GenericPac) return EFI_UNSUPPORTED;
   UINT64 Keys[10], Saved[10], ReadBack[10];
   ZeroMem(Keys, sizeof(Keys));
-  if (!DarwinPacEntropy(Keys)) return EFI_NOT_READY;
+  BOOLEAN UsedTrial = FALSE;
+  if (!DarwinPacSelectEntropy((UINT8 *)Keys, DarwinPacHardwareEntropy, NULL,
+      TrialEntropy, TrialBytes, &UsedTrial)) return EFI_NOT_READY;
+  Print(L"HOUJI26 PAC: entropy=%a; material withheld\n",
+    UsedTrial ? "one-use host CSPRNG" : "firmware/RNDR");
   *KeysPhysical = PhysicalBase + Report.KeysOffset;
   CopyMem((VOID *)(UINTN)*KeysPhysical, Keys, sizeof(Keys));
   UINT64 Daif = READ_SYSREG(daif);
@@ -118,7 +125,7 @@ STATIC EFI_STATUS DarwinPreparePac(CONST VOID *File, UINTN FileSize, UINT64 Virt
   DarwinPacWriteKeys(Saved);
   __asm__ volatile("msr tcr_el1, %0\n\tmsr sctlr_el1, %1\n\tisb\n\tmsr daif, %2"
     : : "r"(Tcr), "r"(Sctlr), "r"(Daif) : "memory");
-  ZeroMem(Keys, sizeof(Keys)); ZeroMem(Saved, sizeof(Saved)); ZeroMem(ReadBack, sizeof(ReadBack));
+  DarwinPacErase(Keys, sizeof(Keys)); DarwinPacErase(Saved, sizeof(Saved)); DarwinPacErase(ReadBack, sizeof(ReadBack));
   if (!Programmed) {
     ZeroMem((VOID *)(UINTN)*KeysPhysical, 80);
     *KeysPhysical = 0;

@@ -465,8 +465,8 @@
   },
   "ios26": {
     "target_manifest": "targets/ios26.json",
-    "status": "uefi-first-entry-blocked-offline-work",
-    "hardware_boot_verified": false,
+    "status": "native-arm64e-pid1-verified-full-system-in-progress",
+    "hardware_boot_verified": true,
     "reference": {
       "repository": "https://github.com/superboyyy/hakios-arm64e-dada",
       "revision": "f1ae906fcc43ba8f763663257724ba938fb820ab",
@@ -512,12 +512,12 @@
       "native_present_lease_and_cache_policy": true,
       "keyboard_statusbar_arm64e_build": true,
       "ios26_apps_helper_arm64e_build": true,
-      "bridge_and_std_arm64e_build": true
+      "bridge_and_std_arm64e_build": true,
+      "arm64e_turnip_build": true,
+      "arm64e_metal_bundle_build": true
     },
     "not_yet_qualified": [
-      "device kernel entry",
       "full iOS26 root/userland and desktop",
-      "full arm64e Metal frontend/Turnip integration",
       "GPU submission/presentation and refresh on houji",
       "multicore scheduler",
       "brightness/touch/battery and app runtime on iOS26"
@@ -529,11 +529,13 @@
       "scope": "Explicit one-attempt profile; bounded on_return reset; original menu behavior remains default",
       "overlay": "bootloader/ios26/manager/overlay"
     },
-    "testing_paused_by_user": true,
+    "testing_paused_by_user": false,
     "latest_device_result": {
-      "kernel_entry_verified": false,
-      "user_entry_verified": false,
-      "result": "User saw only UEFI and a long countdown; stopped device testing. Exact rejection phase unknown; no runtime logs collected."
+      "kernel_entry_verified": true,
+      "user_entry_verified": true,
+      "GPU_verified": false,
+      "GUI_verified": false,
+      "result": "2026-11-06 owner screen photo shows Darwin 25.6.0, initialized GIC/VM/IOKit/HFS and HOUJI IOS26 ARM64E PID1 REACHED. RAM-only one-CPU trial; no physical root install or runtime collectors."
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -599,7 +601,36 @@
         "signed_returns": 12791
       },
       "hardware_verified": false,
-      "full_frontend_and_turnip_rebuilt": false
+      "full_frontend_and_turnip_rebuilt": true
+    },
+    "turnip": {
+      "builder": "tools/build-ios26-turnip.py",
+      "source_tree_sha256": "bdf7345d220a8e6bed1894626d39d2af188188b4c36958a7a4479c21c099c8d5",
+      "architecture": "arm64e",
+      "deployment_target": "26.0",
+      "kernel_abi": 1,
+      "hardware_verified": false,
+      "host_build_verified": true
+    },
+    "graphics_frontend": {
+      "builder": "tools/build-ios26-metal.py",
+      "architecture": "arm64e",
+      "deployment_target": "26.0",
+      "kernel_abi": 1,
+      "logging": false,
+      "render_policy": "sysmem,nocb",
+      "hardware_verified": false
+    },
+    "userland": {
+      "builder": "tools/build-ios26-userland.py",
+      "root_builder": "tools/build-ios26-root.py",
+      "launchd_policy": "userland/ios26/launchd.json",
+      "architecture": "arm64e",
+      "donor_build": "23G90",
+      "host_helper_build_verified": true,
+      "runtime_collectors": false,
+      "root_image_verified": false,
+      "hardware_verified": false
     }
   }
 }

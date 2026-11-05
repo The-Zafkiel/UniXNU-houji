@@ -2,8 +2,9 @@
 
 `codex/houji-ios26` 从 iOS16 现有源码快照 `287c653e` 开始。用户在 r307 后结束
 iOS16 调试并要求转向小米 15 参考项目所用的 iOS26。当前已经编译并链接 XNU12377 arm64e / HOUJI 16 KiB 内核和新 DarwinBoot。
-首轮 RAM 静态 PID1 镜像已发送到手机，用户反馈停在 UEFI；没有内核/PID1 进入证据。
-用户现已暂停实机测试，当前仅做代码和本地构建。完整系统、GPU 和旧功能仍需迁移与验证。
+2026-11-06 的 RAM 静态 PID1 镜像已在小米 14 实机运行，屏幕显示 Darwin 25.6.0 和
+`HOUJI IOS26 ARM64E PID1 REACHED`。UEFI、标准 PAC、单核 XNU、RAM root 和最小
+用户进程已有屏幕证据；完整系统、GPU 和旧功能仍在迁移与验证。用户已恢复实机测试授权。
 
 ## 固定输入
 
@@ -70,12 +71,11 @@ AEA，需在本地取得对应 FCS 密钥并使用 macOS `aea` 解密，再核�
 
 当前 `board.toml`、`sources.lock.json` 的 `components` 以及 `tools/build-kernel.sh`
 仍描述保留的 **iOS16 / XNU8796** 实现。它们不能用于宣称已经构建出 iOS26。
-新目标由 `sources.lock.json` 的 `ios26_preparation` 显式关联；迁移完成前不将旧补丁
+新目标由 `sources.lock.json` 的 `ios26` 显式关联；迁移完成前不将旧补丁
 重标为新内核补丁。
 
-iOS16 工作目录及暂存区保留，不继续启动测试或采集运行期日志。本阶段未向手机写入
-iOS26 镜像。主机检查通过只证明保留源码与准备工具的检查结果，不证明 iOS26 实机启动、
-GPU 正确性或帧率。
+iOS16 工作目录及暂存区保留。当前仅通过 `fastboot boot` 临时运行 iOS26 的 RAM
+镜像，尚未安装完整系统卷；运行期日志搜集器保持关闭。主机检查不证明 GPU 正确性或帧率。
 
 
 ## 当前实现与验证范围
@@ -103,16 +103,17 @@ PSCI reset，启动前必须读取并核实无 wipe 的 Recovery BCB。
 
 内核实际链接成功且无未解析符号，UEFI 编译成功，真实内核静态重定位检查通过。
 XNU 的配套 SDK 符号导出步骤仍报告参考工程缺少的 Apple 私有设备符号；这不是
-完整 SDK 打包验证通过。主机测试不能证明 PAC 在手机上执行成功、进入桌面或帧率。
+完整 SDK 打包验证通过。PAC 与最小 PID1 的实机证据来自本节记录的手机画面；
+主机测试不能替代手机验证，也不证明进入桌面或帧率。
 
 ## 功能对齐清单
 
 | 功能 | iOS26 当前状态 |
 | --- | --- |
-| arm64e 内核、PAC、启动参数和 RAM root | 已编译，首轮停在 UEFI；新修正版仅离线构建 |
-| 单核/PSCI/GIC | 板级地址及已知规避已迁移，实机待验证 |
+| arm64e 内核、PAC、启动参数和 RAM root | 已实机运行至自编 arm64e PID1；屏幕证据确认 |
+| 单核/PSCI/GIC | 单核内核和调度器已运行，GIC 初始化可见；多核仍待验证 |
 | UFS/持久系统卷 | 原生 UFS 入口与 HFS715 已链接；完整 iOS26 root 尚未组装/安装 |
-| A750/Metal/Turnip | 内核呈现同步与 arm64e Rust bridge/std 已构建；完整 Metal/Turnip 接入待完成 |
+| A750/Metal/Turnip | arm64e Metal frontend、bridge/std 和 Turnip 已实际构建、链接、签名；设备 GPU 待验证 |
 | 多核、CPU/GPU DVFS、热控 | 策略保留，iOS26 启用与实机验证待完成 |
 | 触摸、亮度、电池和 USB 充电状态 | 硬件适配已编译，完整系统服务待验证 |
 | 状态栏、系统应用、键盘及旧用户空间兼容 | 键盘/状态栏库与供体应用注册工具已构建 arm64e；运行期和服务迁移待验证 |
@@ -121,11 +122,27 @@ XNU 的配套 SDK 符号导出步骤仍报告参考工程缺少的 Apple 私有�
 本阶段不以编译通过、CPU framebuffer 拷贝计数或用户感觉代替 GPU/高刷证据。
 
 
-## 首轮结果与当前离线修正
+## 启动修正与实机结果
 
-首轮 fastboot 确认接收并执行 RAM 启动镜像，但用户看到的始终是 UEFI 界面和
-长倒计时。不能把 fastboot 的成功当成 XNU 已启动。没有采集运行期日志，具体
-拒绝阶段仍未知；用户要求暂停实机测试后，没有再发起手机启动或安装。
+早期 fastboot 确认接收并执行 RAM 镜像，但只看到 UEFI 和长倒计时。恢复测试后，
+屏幕先定位到 `PAC setup: Not Ready`：当前固件未提供可用 RNG 服务，RNDR 也未供给
+随机数。临时测试镜像现在独立生成完整的 80 字节 PAC 随机材料；加载器优先使用
+固件 RNG/RNDR，缺失时消费该材料，并清零临时副本和交给内核的 ADT 属性。它不复用
+内核的 random-seed，也不使用时钟伪随机。生成的 ADT/FAT 必须私有保存，每次测试
+重新生成；本地启动器以独占消费记录阻止重复发送。可重复安装的正式启动仍需要接入
+本机硬件随机源，此回退仅用于一次性 bring-up。
+
+下一次画面显示 PAC fixup 完成，但 `secondary PAC trampoline: Load Error`。
+`ASM_FUNC` 为起点、密钥槽和终点各生成了独立 COFF 段，链接器将它们重排。
+密钥槽和终点改为同段标签后，实际 UEFI object 检查得到 104 字节代码、96 字节
+槽偏移、16 字节段对齐、局部 ADR 和零外部重定位。
+
+随后 UEFI 成功退出并执行交接汇编，绿色横条不是 XNU 已完成初始化的充分证据。
+发现 `-v` 没有改变 Boot_Video.v_display，内核仍按图形启动隐藏文字。启动器现在
+按完整参数 token 识别 `-v`，首轮配置使用 serial=0。修正后的实际画面显示
+Darwin 25.6.0、GIC/VM/IOKit/HFS 初始化、mockfs RAM root，以及
+`HOUJI IOS26 ARM64E PID1 REACHED`。这确认最小启动链已通过，尚非完整系统桌面。
+全过程保持运行期日志搜集器关闭，没有改写物理系统卷、启动分区或 GPT。
 
 菜单配置原有 `fallback_timeout = 120`。UniXNU 在启动项返回、又没有输入设备时
 会使用它再次倒计时；它独立于内核的 90 秒恢复定时器。新最小配置改为首次 3 秒、
@@ -154,8 +171,17 @@ arm64e Rust bridge 使用固定 nightly-2026-11-03、参考 PAC target 和重建
 开启认证调用、认证返回、认证陷阱及 intrinsics。`sha2` 使用 Rust 实现以避免
 cc-rs 把实验 ABI 当成 musl。实际归档代码检出 4259 个认证间接调用和 12791 个
 认证返回（含 Apple 的 RETAB），不以 target JSON 声明代替机器码检查。
-完整 Metal frontend 和 Turnip 的 arm64e 构建、系统根目录及 launchd26 服务组装、
-触摸/亮度/电池/多核与应用运行期验证仍未完成。
+完整 Metal frontend 与 Turnip 已按 arm64e / iOS26 实际构建并签名。Turnip 固定
+houji ABI v1，shader cache ID 包含源码树、目标与 ABI 头身份；拒绝普通 arm64 输入。
+Metal 构建核对 bridge/std 与 Turnip 归档身份，关闭运行期日志、采样和帧追踪，
+保留 sysmem,nocb 策略。主机链接和 PAC 指令不构成 GPU 渲染或帧率证明。
+
+用户空间已构建带数字签名的 arm64e stage0/init/inject26，直接使用本机 HFS root
+中的 /redwood，不挂载供体分区或 md1。Data 模板来自当前 iOS26 供体，Setup/迁移
+记录使用 23G90；初次完整系统采用 ramfs Data，持久化和旧数据迁移尚未验证。
+完整 HFS 镜像正在独立组装，保留 stock launchd、系统应用、OS/App cryptex 和
+ExclaveOS 资源，并接入本机 Metal bundle、键盘/状态栏兼容及应用注册服务。
+触摸/亮度/电池/多核、完整桌面与应用运行期验证仍未完成。
 
 ## 本地构建入口
 
@@ -169,3 +195,9 @@ cc-rs 把实验 ABI 当成 musl。实际归档代码检出 4259 个认证间接�
 - `tools/build-userland-compat.py --profile ios26`：键盘与状态栏的 arm64e 库。
 - `tools/build-system-apps.py --profile ios26 --system-root ...`：只读扫描供体实际应用，
   生成专用目录并构建注册工具，不复用 iOS16 固定目录，也不安装或注册。
+
+- `tools/build-ios26-turnip.py`：从独立的固定 Mesa 源码树编译 arm64e Darwin ABI v1 库，校验导出与签名。
+- `tools/build-ios26-metal.py`：仅接受匹配的 arm64e bridge/std 与 Turnip，生成关闭运行期诊断的 Metal bundle。
+- `tools/build-ios26-userland.py`：从固定参考源码编译最小 HFS stage0、init、inject26 和当前供体 Data 模板。
+- `tools/build-ios26-root.py --plan`：核对稳定 Recovery 备份、只读供体挂载及已构建组件，输出本地组装方案。
+  实际组装需要 macOS 管理员认证以保存 iOS 数字所有者；只操作新建的本地 HFS 镜像，不能安装手机分区。

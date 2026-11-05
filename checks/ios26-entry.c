@@ -46,6 +46,19 @@ static uint8_t *readFile(const char *name, size_t *bytes) {
 static void put32(uint8_t *p, uint32_t v) { memcpy(p,&v,4); }
 static void put64(uint8_t *p, uint64_t v) { memcpy(p,&v,8); }
 int main(int argc,char **argv) {
+    assert(DarwinBootVerbose("-v serial=0"));
+    assert(DarwinBootVerbose(" \tdebug=1\t-v\t"));
+    assert(DarwinBootVerbose("-v"));
+    assert(!DarwinBootVerbose(""));
+    assert(!DarwinBootVerbose("-verbose foo=-v -v=1"));
+    assert(!DarwinBootVerbose("-"));
+    if(argc==3 && strcmp(argv[1],"--adt")==0) {
+        size_t bytes=0;uint8_t *data=readFile(argv[2],&bytes);
+        UINTN at=0,rd=MAX_UINTN,tc=MAX_UINTN,db=MAX_UINTN,ds=MAX_UINTN,se=MAX_UINTN,en=MAX_UINTN;
+        UINT64 window=0;BOOLEAN packed=FALSE;
+        int valid=AdtNode(data,bytes,&at,0,3,&rd,&tc,&window,&packed,&db,&ds,&se,&en) && at==bytes;
+        free(data);return valid ? 0 : 1;
+    }
     uint8_t small[4096]={0};
     const uint64_t address=0xfffffff007004000ULL;
     put32(small,0xfeedfacf);put32(small+4,0x100000c);put32(small+8,0x80000002);
@@ -70,14 +83,14 @@ int main(int argc,char **argv) {
         printf("PASS: production kernel parser: segments=%zu entry=%llx window-base=%llx\n",
             kernel.Count,(unsigned long long)kernel.Entry,(unsigned long long)kernel.Base);
         free(data);data=readFile(argv[2],&bytes);
-        UINTN offset=0,rd=MAX_UINTN,tc=MAX_UINTN,db=MAX_UINTN,ds=MAX_UINTN,secondary=MAX_UINTN;
+        UINTN offset=0,rd=MAX_UINTN,tc=MAX_UINTN,db=MAX_UINTN,ds=MAX_UINTN,secondary=MAX_UINTN,entropy=MAX_UINTN;
         UINT64 window=0;BOOLEAN packed=FALSE;
-        assert(AdtNode(data,bytes,&offset,0,3,&rd,&tc,&window,&packed,&db,&ds,&secondary));
+        assert(AdtNode(data,bytes,&offset,0,3,&rd,&tc,&window,&packed,&db,&ds,&secondary,&entropy));
         assert(offset==bytes && rd!=MAX_UINTN && db!=MAX_UINTN && ds!=MAX_UINTN && secondary!=MAX_UINTN);
         assert(!packed && tc==MAX_UINTN && U64(data+rd)==0 && U64(data+rd+8)==0);
         for(size_t cut=0;cut<bytes;++cut) {
-            offset=0;rd=tc=db=ds=secondary=MAX_UINTN;window=0;packed=FALSE;
-            assert(!AdtNode(data,cut,&offset,0,3,&rd,&tc,&window,&packed,&db,&ds,&secondary));
+            offset=0;rd=tc=db=ds=secondary=entropy=MAX_UINTN;window=0;packed=FALSE;
+            assert(!AdtNode(data,cut,&offset,0,3,&rd,&tc,&window,&packed,&db,&ds,&secondary,&entropy));
         }
         free(data);
         puts("PASS: production ADT parser, required handoffs and every truncated boundary");

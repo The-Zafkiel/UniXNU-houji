@@ -51,6 +51,9 @@ def main():
     chosen.set('hakios,secondary-entry', bytes(8))
     chosen.set('firmware-version', b'houji-ios26-arm64e\0')
     chosen.set('random-seed', os.urandom(256))
+    # Independent, complete PAC key material for a single RAM-only trial. The
+    # loader consumes this before copying the ADT to XNU; never reuse this ADT.
+    chosen.set('houji,pac-entropy', os.urandom(80))
     maps = [item for item in chosen.children if item.name == 'memory-map']
     if not maps:
         memory = Node([('name', 0, b'memory-map\0')])
@@ -64,13 +67,16 @@ def main():
     assert serialize(parse(blob)) == blob
     assert serialize(parse(raw).child('arm-io')) == serialize(armio), 'Hardware nodes changed'
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_bytes(blob)
+    with args.output.open('xb') as stream:
+        os.chmod(args.output, 0o600)
+        stream.write(blob)
     receipt = {'profile': 'arm64e-first-entry', 'cpus': 1, 'CPU_pages': 16384,
                'memory_bytes': args.window_gib << 30, 'arm_io_preserved': True,
                'GPU_requested': False, 'UFS_requested': False, 'hardware_verified': False,
                'input_sha256': hashlib.sha256(raw).hexdigest(),
                'output_sha256': hashlib.sha256(blob).hexdigest(),
-               'removed_chosen_properties': removed, 'random_seed_generated': True}
+               'removed_chosen_properties': removed, 'random_seed_generated': True,
+               'independent_pac_entropy_generated': True, 'single_boot_only': True}
     args.output.with_suffix('.json').write_text(json.dumps(receipt, indent=2) + '\n')
     print('Prepared houji arm64e first-entry ADT: one CPU, 16 KiB pages, unchanged hardware nodes')
 

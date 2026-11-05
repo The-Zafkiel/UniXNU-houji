@@ -76,10 +76,9 @@ ASM_FUNC(DarwinEnter)
 // PSCI CPU_ON enters with MMU off and x0 = the real XNU reset-vector PA.
 // This code and its adjacent pointer are copied into reserved kernel-owned RAM.
 // PC-relative ADR stays valid after copying; there are no external relocations.
-.balign 16
-ASM_FUNC(DarwinSecondaryPacStart)
+ASM_FUNC_ALIGN(DarwinSecondaryPacStart, 16)
   msr daifset, #15
-  adr x9, DarwinSecondaryPacKeysAddress
+  adr x9, ASM_PFX(DarwinSecondaryPacKeysAddress)
   ldr x9, [x9]
   .arch_extension pauth
   ldp x10, x11, [x9, #0]
@@ -104,6 +103,10 @@ ASM_FUNC(DarwinSecondaryPacStart)
   isb
   br x0
 .balign 8
-ASM_FUNC(DarwinSecondaryPacKeysAddress)
+// These are labels inside the copied function, not separate functions.
+// ASM_FUNC would create separate PE/COFF sections that the linker can reorder.
+.global ASM_PFX(DarwinSecondaryPacKeysAddress)
+ASM_PFX(DarwinSecondaryPacKeysAddress):
   .quad 0
-ASM_FUNC(DarwinSecondaryPacEnd)
+.global ASM_PFX(DarwinSecondaryPacEnd)
+ASM_PFX(DarwinSecondaryPacEnd):

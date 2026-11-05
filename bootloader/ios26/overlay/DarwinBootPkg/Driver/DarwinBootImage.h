@@ -22,6 +22,16 @@ typedef struct {
 
 STATIC UINT32 U32 (CONST VOID *P) { return ReadUnaligned32 ((CONST UINT32 *)P); }
 STATIC UINT64 U64 (CONST VOID *P) { return ReadUnaligned64 ((CONST UINT64 *)P); }
+
+STATIC BOOLEAN DarwinBootVerbose(CONST CHAR8 *Args) {
+  while (*Args) {
+    while (*Args == ' ' || *Args == '\t') ++Args;
+    if (Args[0] == '-' && Args[1] == 'v' &&
+        (Args[2] == 0 || Args[2] == ' ' || Args[2] == '\t')) return TRUE;
+    while (*Args && *Args != ' ' && *Args != '\t') ++Args;
+  }
+  return FALSE;
+}
 STATIC
 EFI_STATUS
 ParseKernel (CONST UINT8 *Data, UINTN Size, KERNEL *Kernel)
@@ -97,7 +107,7 @@ ParseKernel (CONST UINT8 *Data, UINTN Size, KERNEL *Kernel)
 
 STATIC
 BOOLEAN
-AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN ParentPath, UINTN *RamdiskOffset, UINTN *TrustCacheOffset, UINT64 *WindowSize, BOOLEAN *KeepPacked, UINTN *DramBaseOffset, UINTN *DramSizeOffset, UINTN *SecondaryOffset)
+AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN ParentPath, UINTN *RamdiskOffset, UINTN *TrustCacheOffset, UINT64 *WindowSize, BOOLEAN *KeepPacked, UINTN *DramBaseOffset, UINTN *DramSizeOffset, UINTN *SecondaryOffset, UINTN *PacEntropyOffset)
 {
   UINT32 Properties;
   UINT32 Children;
@@ -110,6 +120,7 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
   UINTN  DramBaseCandidate;
   UINTN  DramSizeCandidate;
   UINTN  SecondaryCandidate;
+  UINTN  PacEntropyCandidate;
   CONST UINT8 *Name;
   UINTN  NameLength;
 
@@ -121,6 +132,7 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
   DramBaseCandidate = MAX_UINTN;
   DramSizeCandidate = MAX_UINTN;
   SecondaryCandidate = MAX_UINTN;
+  PacEntropyCandidate = MAX_UINTN;
   if ((Depth > 64) || (*Offset > Size) || (Size - *Offset < 8)) { return FALSE; }
   Properties = U32 (Data + *Offset);
   Children = U32 (Data + *Offset + 4);
@@ -158,6 +170,10 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
       if ((SecondaryCandidate != MAX_UINTN) || (Length != 8)) { return FALSE; }
       SecondaryCandidate = *Offset;
     }
+    if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "houji,pac-entropy") == 0) {
+      if ((PacEntropyCandidate != MAX_UINTN) || (Length != 80)) { return FALSE; }
+      PacEntropyCandidate = *Offset;
+    }
     if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "dram-base") == 0) {
       if ((DramBaseCandidate != MAX_UINTN) || (Length != 8)) { return FALSE; }
       DramBaseCandidate = *Offset;
@@ -186,6 +202,10 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
     if ((Path != 1) || (*SecondaryOffset != MAX_UINTN) || (U64 (Data + SecondaryCandidate) != 0)) { return FALSE; }
     *SecondaryOffset = SecondaryCandidate;
   }
+  if (PacEntropyCandidate != MAX_UINTN) {
+    if ((Path != 1) || (*PacEntropyOffset != MAX_UINTN)) { return FALSE; }
+    *PacEntropyOffset = PacEntropyCandidate;
+  }
   if (DramBaseCandidate != MAX_UINTN) {
     if ((Path != 1) || (*DramBaseOffset != MAX_UINTN) || (U64 (Data + DramBaseCandidate) != 0)) { return FALSE; }
     *DramBaseOffset = DramBaseCandidate;
@@ -201,7 +221,7 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
   }
   if (Children > (Size - *Offset) / 8) { return FALSE; }
   for (Index = 0; Index < Children; Index++) {
-    if (!AdtNode (Data, Size, Offset, Depth + 1, Path, RamdiskOffset, TrustCacheOffset, WindowSize, KeepPacked, DramBaseOffset, DramSizeOffset, SecondaryOffset)) { return FALSE; }
+    if (!AdtNode (Data, Size, Offset, Depth + 1, Path, RamdiskOffset, TrustCacheOffset, WindowSize, KeepPacked, DramBaseOffset, DramSizeOffset, SecondaryOffset, PacEntropyOffset)) { return FALSE; }
   }
   return TRUE;
 }

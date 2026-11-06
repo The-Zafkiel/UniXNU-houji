@@ -32,7 +32,9 @@ struct tu_darwin_submit_rec {uint32_t call_us=0,busy=0,space_wait_us=0;};
 static uint64_t tu_trace_clock_ns(){static uint64_t v;return ++v;}
 static int vk_device_set_lost(int*,const char*,...){return -3;}
 static int dw_wait_fence_locked_free(tu_device*,uint32_t,uint64_t){return 0;}
-#define MIN2(a,b) std::min((a),(b))
+// Both operands in the production call are unsigned 64-bit durations. Linux
+// spells uint64_t as unsigned long; Darwin uses unsigned long long.
+#define MIN2(a,b) std::min<uint64_t>((a),(b))
 '''
 unit+='static kern_return_t\n'+function('dw_call(uint32_t method,')
 unit+='\nextern "C" bool\n'+function('tu_darwin_set_priority(uint32_t foreground, uint32_t background)\n{')

@@ -87,7 +87,7 @@ def main():
         parser.error('Host checks compile AArch64 SMMU bindings; use an arm64 host')
     print(f'Host check suite: {suite} ({platform.system()} {platform.machine()})', flush=True)
     if suite == 'portable':
-        print('Apple runtime checks are not covered here; CI runs them separately on macOS.', flush=True)
+        print('Apple runtime checks are not covered here; run --suite all on Apple Silicon macOS.', flush=True)
     if suite != 'apple':
         with tempfile.TemporaryDirectory(prefix='houji-check-') as temporary:
             for filename, compiler, standard in [

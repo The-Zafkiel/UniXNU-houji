@@ -28,8 +28,9 @@ python3 tools/run-host-checks.py
 SMMU 检查会编译 AArch64 绑定，因此不能在 x86 主机直接运行完整套件。
 可用 `--suite portable` 单独检查公共逻辑，或在 Apple Silicon macOS 使用 `--suite apple`
 检查 Foundation、Metal、IOSurface、Mach 采样及 Darwin 日志线程。
-CI 分别运行 Ubuntu 24.04 arm64 的可移植检查和 macOS 15 的完整检查；不会以 Linux 通过代替
-Apple 接口验证。这里的 macOS 检查仍不执行手机 GPU。
+日常在本地运行这些检查。GitHub Actions 仅保留手动触发，不再随 push 或 pull request 自动运行；
+手动任务使用 Ubuntu 24.04 arm64 的可移植检查和 macOS 15 的完整检查，不构建系统镜像。
+Linux 通过不能代替 Apple 接口验证，macOS 检查也不执行手机 GPU。
 
 检查覆盖 GPU 的 12 个频点、上限取整、突发负载与空闲降频、HFI 表一致性、CPU 交互升降频和 Turnip BO 复用回归；另外编译有效 Submit/VM/SMMU 源码，在 4 KiB/16 KiB CPU 页的主机替身上验证缓存维护、TLB 同步、地址复用及失败隔离。板级提交门、显示队列检查也执行有效源码中的函数；当前默认关闭 shader 预热。另测 TSENS 有效位/有符号温度/滞后与丢失读数，以及亮度范围、渐变和 DSI FIFO 的忙碌/超时/恢复。BO 检查会在同一线程交错条件下验证旧函数失败、修复函数通过。ASAN/UBSAN 检查不仿真 GPU 命令执行或证明实际 FPS。
 

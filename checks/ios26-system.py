@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 from pathlib import Path
+import platform
 import re
 import struct
 import subprocess
@@ -118,12 +119,21 @@ with tempfile.TemporaryDirectory(prefix='houji26-system-') as temporary:
                         '.text\n.globl _test_screen\n.p2align 2\n_test_screen:\n'
                         'stp x20,x30,[sp,#-16]!\nmov x20,x0\nHOUJI26_SCREEN 0x00ff,0xffff\n'
                         'ldp x20,x30,[sp],#16\nret\n')
-    screen = temporary / 'screen'
-    subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
-                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all', *includes,
-                    '-I', str(ROOT / 'kernel/ios26/overlay/osfmk/arm64'),
-                    str(assembly), str(ROOT / 'checks/ios26-screen.c'), '-o', str(screen)], check=True)
-    subprocess.run([str(screen)], check=True)
+    screen_includes = [*includes, '-I', str(ROOT / 'kernel/ios26/overlay/osfmk/arm64')]
+    if platform.system() == 'Darwin':
+        screen = temporary / 'screen'
+        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                        '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                        *screen_includes, str(assembly), str(ROOT / 'checks/ios26-screen.c'),
+                        '-o', str(screen)], check=True)
+        subprocess.run([str(screen)], check=True)
+        print('PASS: actual AArch64 screen marker checks pixel bounds/invalid geometry; no MMU emulation')
+    else:
+        # The production XNU macro uses the Darwin assembler's argument syntax
+        # and Mach-O symbols. Keep that source intact when checking it on Linux.
+        subprocess.run(['clang', '-target', 'arm64-apple-macos11', *screen_includes,
+                        '-c', str(assembly), '-o', str(temporary / 'screen.o')], check=True)
+        print('PASS: production AArch64 screen marker cross-assembles for Darwin; execution requires macOS')
     reserved = temporary / 'reserved-nc'
     subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
                     '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
@@ -140,5 +150,5 @@ with tempfile.TemporaryDirectory(prefix='houji26-system-') as temporary:
     assert '!hzr_par(r,g.pa[which]+i*4096)' in content
 print('PASS: production full-system ADT preserves houji hardware, validates CPU/GPU slots and fresh entropy; applied UEFI uses Darwin 25 bounds and mandatory startup gates; no hardware emulation')
 print('PASS: production early-failure recovery requires exact live BCB readback, preserves status, waits ten seconds, retains handlers and performs no writes; host callbacks only')
-print('PASS: exact no-payload LUN0 flush survives a closed data-write gate; WRITE10 still requires arming and its bounded range; actual AArch64 screen marker checks pixel bounds/invalid geometry; no firmware or MMU emulation')
+print('PASS: exact no-payload LUN0 flush survives a closed data-write gate; WRITE10 still requires arming and its bounded range; no firmware emulation')
 print('PASS: production reserved-NC policy publishes only two validated 16K pages, excludes padding/PIL neighbours/kernel RAM, rejects repeat registration and wrap, and retains HZR/AT checks; no GPU qualification')

@@ -75,7 +75,8 @@ static inline void hjt26_text(Hjt26Surface *s, const unsigned char *font,
         for (uint32_t r = 0; r < 16; ++r) {
             unsigned bits = font[(unsigned)ch * 16 + r];
             for (uint32_t c = 0; c < 8; ++c) {
-                uint32_t pixel = (bits & (0x80U >> c)) ? 0xffeeeeeeU : 0xff000000U;
+                /* XNU ISO font stores the leftmost pixel in bit zero. */
+                uint32_t pixel = (bits & (1U << c)) ? 0xffeeeeeeU : 0xff000000U;
                 for (uint32_t dy = 0; dy < 2; ++dy)
                     for (uint32_t dx = 0; dx < 2; ++dx)
                         s->base[(size_t)(y + 2 * r + dy) * s->row_words + x + 2 * c + dx] = pixel;

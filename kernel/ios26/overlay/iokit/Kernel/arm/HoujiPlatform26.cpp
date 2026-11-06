@@ -57,6 +57,16 @@ extern "C" void houji26_boot_exec(const char *path, int result, int phase) {
     if (phase < 0 || static_cast<unsigned>(phase) >= sizeof(kinds) / sizeof(kinds[0])) return;
     bootResult(kinds[phase], path, result, "");
 }
+extern "C" void houji26_boot_header(const char *path, const void *data, unsigned bytes, int resid, uint64_t file_bytes) {
+    if (!bootResultsEnabled() || !path || !data || bytes < 32 || resid < 0 || static_cast<unsigned>(resid) > bytes ||
+        __atomic_load_n(&bootMainSeen, __ATOMIC_ACQUIRE)) return;
+    if (strcmp(path, "/sbin/launchd") && strcmp(path, "/redwood/sbin/init") && strcmp(path, "/sbin/launchd.ios")) return;
+    uint32_t words[8]; memcpy(words, data, sizeof(words));
+    char detail[256];
+    snprintf(detail, sizeof(detail), "header=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x read=%u resid=%d file-bytes=%llu",
+        words[0],words[1],words[2],words[3],words[4],words[5],words[6],words[7],bytes,resid,(unsigned long long)file_bytes);
+    bootResult("pid1-vnode-header-ready", path, 0, detail);
+}
 static void bootMainWorker(void *, wait_result_t) {
     bootResult("stock-launchd-main", "/sbin/launchd.ios", 0, "kernel initproc_spawned accepted");
 }

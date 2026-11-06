@@ -524,7 +524,8 @@
       "initialized_panic_record_bounds": true,
       "full_system_boot_epoch": true,
       "coherence_precondition_fallback": true,
-      "firmware_word_writes_and_AArch64_instructions": true
+      "firmware_word_writes_and_AArch64_instructions": true,
+      "ISO_font_orientation": true
     },
     "not_yet_qualified": [
       "stock iOS26 launchd, userland runtime and desktop",
@@ -541,7 +542,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v11-header-ready-concurrent-ADSP-7",
+      "profile": "full-system-v12-ADSP-ready-PID1-ENOEXEC",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -551,7 +552,7 @@
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Current-trial CRC passed. Native GPU qualification and retained provider passed. PID1 clone and vnode header read were observed; its next checkpoint competed with the ADSP startup worker. Full tails of v8/v10/v11 consistently end at ADSP stage 7, before DTB firmware load completes. This does not establish PID1 as the reset cause. Device-typed carveout bulk memcpy/bzero is being replaced by bounded aligned word writes; hardware result pending.",
+      "result": "Current-trial CRC and user photo agree: ADSP DTB authentication/segment load, ADSP start, ready, GLINK and client channel progressed through stages 8-13 after aligned carveout writes. Initial PID1 exec returned ENOEXEC (8), with no Mach-O load-begin event. User photo confirms the matching kernel panic and bounded return to OrangeFox. Still no EL0/stock launchd/GUI/Metal shader proof.",
       "native_HFSX_mounted": true,
       "init_exec_attempted": true,
       "GPU_2D_startup_self_test": {
@@ -576,13 +577,16 @@
       "PID1_startup_results": {
         "initial_exec_begin": true,
         "clone_ready": true,
-        "image_activation_observed": false,
-        "exec_return_observed": false,
+        "image_activation_observed": true,
+        "exec_return_observed": true,
         "helper_init_observed": false,
         "stock_launchd_main_observed": false,
-        "vnode_header_ready": true
+        "vnode_header_ready": true,
+        "image_activation_result": 8,
+        "exec_result": 8,
+        "image_loaded": false
       },
-      "recovery_seen_within_seconds": 199,
+      "recovery_seen_within_seconds": 188,
       "coherence_probe": {
         "status": 0,
         "phase": 6,
@@ -593,7 +597,16 @@
         "proof": true,
         "result": "same-boot proof passed; fallback not taken"
       },
-      "concurrent_ADSP_last_stage": 7
+      "concurrent_ADSP_last_stage": 13,
+      "ADSP": {
+        "DTB_metadata_authenticated": true,
+        "DTB_loaded": true,
+        "firmware_loaded": true,
+        "started": true,
+        "ready": true,
+        "GLINK_and_channel_up": true,
+        "battery_UI_verified": false
+      }
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -725,7 +738,7 @@
       },
       "flush_policy": "Only exact payload-free LUN0 SYNCHRONIZE CACHE is independent of write arming; WRITE10 retains the original arm and fixed logfs range",
       "reserved_nc_policy": "Current-trial HZR EFI/GCD/AT validation precedes one-time whitelist of exactly the metadata and fixed target 16K pages; WCOMB only, no padding/PIL-wide/kernel-RAM allowance; actual AT/PA checks retained",
-      "terminal_screen": "Existing mapped console and kernel font only; panic/halt visible up to 90 seconds, clamped to original trial deadline. Normal deadline includes its 20-second display. No panic allocation, new mapping, UFS I/O or UEFI return. Screen visibility remains unqualified.",
+      "terminal_screen": "Existing mapped console and XNU ISO font; corrected LSB-first glyph bit order. Panic/halt up to 90 seconds within original deadline; no panic allocation, remapping, UFS I/O or UEFI return. User photo verified old mirrored panic text and matching ENOEXEC; corrected on-device orientation awaits next trial.",
       "panic_reason_record": "First formatted panic or handled terminal reason in owned RAM only, with current-trial identity and CRC; initialized-empty state is distinct. Exact locator is in existing startup header. Optional next-UEFI reader defaults off; bounds/translation/identity/CRC enforced. Current Recovery path did not retain a matching record, so no error reason recovered.",
       "pid1_startup_results": "Optional houji_pid1_startup=1, default off; native-root and bounded-Recovery gates; up to eight approved PID1 exec/main and authorized reboot results in normal interruptible context only, using the existing startup file. No periodic runtime collector; successful exec is not EL0 execution proof.",
       "calendar_source": "Fresh 64-bit host boot-epoch in chosen, consumed by GenericARMPE; unused iOS16 houji_epoch argument removed; no RTC qualification",

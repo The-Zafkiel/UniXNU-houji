@@ -52,8 +52,8 @@ int main(void) {
     assert(!hjt26_surface(NULL, base, 80, 160, 384, 32, capacity));
     assert(!memcmp(&s, &before, sizeof s));
     for (size_t i = 0; i < sizeof pixels / sizeof pixels[0]; ++i) pixels[i] = 0x12345678;
-    memset(font + 'A' * 16, 0x80, 16);
-    memset(font + '?' * 16, 0x40, 16);
+    memset(font + 'A' * 16, 0x01, 16);
+    memset(font + '?' * 16, 0x02, 16);
     const char title[] = {'A', '\r', '\n', (char)0xff, 'B'};
     char detail[8192]; memset(detail, 'x', sizeof detail);
     hjt26_render(&s, font, title, sizeof title, detail, sizeof detail);
@@ -61,6 +61,15 @@ int main(void) {
     assert(s.base[8 * 96 + 10] == 0xff000000U);
     assert(s.base[40 * 96 + 8] == 0xff000000U);
     assert(s.base[40 * 96 + 10] == 0xffeeeeeeU);
+    /* Pinned XNU ISO glyph F: a left stem and top bar, not a mirrored F. */
+    static const unsigned char glyph_f[16] = {
+        0,0,0x7f,3,3,3,0x3f,3,3,3,3,3,0,0,0,0
+    };
+    memcpy(font + 'F' * 16, glyph_f, sizeof glyph_f);
+    hjt26_render(&s, font, "F", 1, "", 0);
+    assert(s.base[14 * 96 + 8] == 0xffeeeeeeU);
+    assert(s.base[14 * 96 + 20] == 0xff000000U);
+    assert(s.base[12 * 96 + 20] == 0xffeeeeeeU);
     for (unsigned i = 0; i < 32; ++i) {
         assert(pixels[i] == 0x12345678);
         assert(pixels[32 + 96 * 160 + i] == 0x12345678);

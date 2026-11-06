@@ -1402,20 +1402,21 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  	if (lret != LOAD_SUCCESS && exec_trace) {
  		printf("exectrace: %s: load_machfile failed: %d\n", imgp->ip_ndp->ni_cnd.cn_pnbuf, lret);
  	}
-@@ -3075,6 +3083,12 @@
+@@ -3075,6 +3083,13 @@
  		memset(imgp->ip_vdata + (PAGE_SIZE - resid), 0x0, resid);
  	}
  
 +#if HOUJI_IOS26
 +	if (proc_getpid(current_proc()) == 1) {
 +		extern void houji26_boot_exec(const char *, int, int);
-+		houji26_boot_exec(excpath, 0, 6);
++		extern void houji26_boot_header(const char *, const void *, unsigned, int, uint64_t);
++		houji26_boot_header(excpath, imgp->ip_vdata, PAGE_SIZE, resid, imgp->ip_vattr->va_data_size);
 +	}
 +#endif
  encapsulated_binary:
  	/* Limit the number of iterations we will attempt on each binary */
  	if (++itercount > EAI_ITERLIMIT) {
-@@ -6112,7 +6126,23 @@
+@@ -6112,7 +6127,23 @@
  	muap.argp = uap->argp;
  	muap.envp = uap->envp;
  	muap.mac_p = USER_ADDR_NULL;
@@ -1439,7 +1440,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  
  	return err;
  }
-@@ -6163,6 +6193,15 @@
+@@ -6163,6 +6194,15 @@
  		struct vnode_attr va;
  		struct vnode_attr origva;
  	} *__execve_data;
@@ -1455,7 +1456,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  
  	/* Allocate a big chunk for locals instead of using stack since these
  	 * structures are pretty big.
-@@ -6222,6 +6261,9 @@
+@@ -6222,6 +6262,9 @@
  
  		new_task = get_threadtask(imgp->ip_new_thread);
  	}
@@ -1465,7 +1466,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  
  #if HAS_MTE_EMULATION_SHIMS
  	/*
-@@ -6250,6 +6292,9 @@
+@@ -6250,6 +6293,9 @@
  	 * as 0 and pretends the call succeeded.
  	 */
  	error = exec_activate_image(imgp);
@@ -1475,7 +1476,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  	/* thread and task ref returned for vfexec case */
  
  	if (imgp->ip_new_thread != NULL) {
-@@ -6310,6 +6355,9 @@
+@@ -6310,6 +6356,9 @@
  		 */
  		ipc_task_enable(new_task);
  		error = process_signature(p, imgp);
@@ -1485,7 +1486,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  	}
  
  
-@@ -6462,6 +6510,9 @@
+@@ -6462,6 +6511,9 @@
  		 * switch the tasks, terminating the current task without the switch would
  		 * result in loosing the SIGKILL status.
  		 */

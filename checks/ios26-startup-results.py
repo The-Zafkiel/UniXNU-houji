@@ -97,6 +97,13 @@ int main() {
     assert(writes[4].find("pid1-vnode-header-ready")!=std::string::npos);
     assert(writes[5].find("pid1-macho-load-begin")!=std::string::npos);
     assert(writes[6].find("pid1-macho-load-end")!=std::string::npos);
+    reset();uint32_t header[8]={0xfeedfacf,0x100000c,0x80000002,2,9,976,1,0};
+    houji26_boot_header("/sbin/launchd",header,31,0,33680);
+    houji26_boot_header("/sbin/launchd",header,32,33,33680);
+    assert(writes.empty());
+    houji26_boot_header("/sbin/launchd",header,16384,0,33680);
+    assert(writes.size()==1 && writes[0].find("header=feedfacf,0100000c,80000002,00000002")!=std::string::npos);
+    assert(writes[0].find("read=16384 resid=0 file-bytes=33680")!=std::string::npos);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='houji26-startup-results-') as name:

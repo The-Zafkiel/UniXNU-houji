@@ -1216,3 +1216,11 @@ fastboot 启动后 159 秒以内已回到 OrangeFox，早于正常测试上限�
 具体错误，不能确认哪个终止入口触发。源码核对发现本机 ADT 没有 iBoot panic
 区域，因此另将现有 formatter 的首条原因保存在带本轮标识 / CRC 的有界 RAM
 记录中，供终止画面和可选的下一轮 UEFI 精确读取；不会在 panic 中写存储。
+
+后续完整系统再次确认同一 2D 图像、八次 WB/coherence 回读、IOKit wrapper 自检、
+retained GPU handoff、HFS 根卷挂载及 `/sbin/launchd` 尝试。两次独立 UEFI-only
+取证镜像删除 kernel / ADT，不进入 GPU 或 XNU；检查文件的前缀 CRC 有效。第二次
+读取确认地址 identity / Normal-WB (`FF`) 映射通过，但内存内容不匹配本轮标识与
+CRC，因此没有接受或发布任何错误正文。该 RAM 恢复方案在当前路径没有取得原因。
+下一轮转为可选、最多八条的正常上下文 PID1 启动结果，并将错误画面延长至最多
+90 秒、仍受原测试期限限制。桌面、stock launchd 和 Metal shader 仍未验证。

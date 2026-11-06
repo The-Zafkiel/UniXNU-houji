@@ -27,12 +27,16 @@ static inline uint32_t hp26_crc(const Hp26Record *record) {
     return ~crc;
 }
 
-static inline int hp26_valid(const Hp26Record *record, const uint8_t run_id[16]) {
+static inline int hp26_envelope(const Hp26Record *record, const uint8_t run_id[16]) {
     static const uint8_t magic[8] = {'H','J','P','A','N','0','2','6'};
-    if (!record || !run_id || !record->length || record->length >= sizeof(record->text)) return 0;
+    if (!record || !run_id || record->length >= sizeof(record->text)) return 0;
     for (unsigned i = 0; i < 8; ++i) if (record->magic[i] != magic[i]) return 0;
     for (unsigned i = 0; i < 16; ++i) if (record->run_id[i] != run_id[i]) return 0;
     return !record->text[record->length] && hp26_crc(record) == record->crc32;
+}
+
+static inline int hp26_valid(const Hp26Record *record, const uint8_t run_id[16]) {
+    return record && record->length && hp26_envelope(record, run_id);
 }
 
 static inline int hp26_range(uint64_t address, uint64_t owned_base, uint64_t owned_bytes,

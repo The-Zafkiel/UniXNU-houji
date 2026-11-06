@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import struct
+from time import time as unix_time
 from ios26_adt import parse, serialize
 
 
@@ -50,6 +51,9 @@ def prepare(raw, donor):
     chosen.set('hakios,secondary-entry', bytes(8))
     chosen.set('houji,smp-enabled', struct.pack('<I', 1))
     chosen.set('firmware-version', b'houji-ios26-arm64e\0')
+    # GenericARMPE reads a 64-bit boot-epoch; the old houji_epoch argument
+    # belongs to the iOS16 platform and is not a clock source on this target.
+    chosen.set('boot-epoch', struct.pack('<Q', int(unix_time())))
     chosen.set('random-seed', os.urandom(256))
     chosen.set('houji,pac-entropy', os.urandom(80))
     memory = chosen.child('memory-map')

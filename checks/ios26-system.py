@@ -18,6 +18,7 @@ from ios26_adt import Node, parse, serialize
 spec = importlib.util.spec_from_file_location('system_adt', ROOT / 'tools/make-ios26-system-adt.py')
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
+builder.unix_time = lambda: 1793923200
 
 
 def node(name, properties=(), children=()):
@@ -50,6 +51,7 @@ assert serialize(first.child('arm-io')) == serialize(armio)
 assert first.get('model') == b'iPhone18,1\0' and first.get('serial-number') is None
 assert first.child('chosen').get('local-sentinel') == b'retained'
 assert first.child('chosen').get('darwinboot-memory-size') == struct.pack('<Q', 8 << 30)
+assert first.child('chosen').get('boot-epoch') == struct.pack('<Q', 1793923200)
 for name, length in [('random-seed', 256), ('houji,pac-entropy', 80)]:
     a, b = first.child('chosen').get(name), second.child('chosen').get(name)
     assert len(a) == len(b) == length and a != b

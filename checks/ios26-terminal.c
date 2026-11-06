@@ -9,6 +9,13 @@ static unsigned char font[256 * 16];
 int main(void) {
     Hjt26Reason reason = {0}, truncated = {0};
     const uint8_t run_id[16] = {1,2,3}, other[16] = {4,5,6};
+    Hjt26Reason initialized = {0};
+    hjt26_initialize(&initialized, run_id);
+    assert(initialized.state == 0 && hp26_envelope(&initialized.record, run_id));
+    assert(!hp26_valid(&initialized.record, run_id));
+    hjt26_capture(&initialized, "first failure after initialization", run_id);
+    hjt26_initialize(&initialized, other);
+    assert(initialized.state == 2 && hp26_valid(&initialized.record, run_id));
     hjt26_capture(&reason, NULL, run_id); hjt26_capture(&reason, "", run_id);
     assert(reason.state == 0);
     hjt26_capture(&reason, "original panic: errno 8", run_id);

@@ -30,12 +30,14 @@ STATIC VOID Houji26ReadPriorPanic(BOOLEAN RecoveryReady) {
     return;
   }
   BOOLEAN Mapped = Page == ExpectedPage;
+  UINT64 FirstAttribute = 0;
   UINT64 SavedPar;
   __asm__ volatile("mrs %0, par_el1" : "=r"(SavedPar));
   for (UINT64 At = Page; At < Page + Pages * 4096; At += 4096) {
     UINT64 Par;
     __asm__ volatile("at s1e1r, %1\n\tisb\n\tmrs %0, par_el1" : "=r"(Par) : "r"(At) : "memory");
     UINT64 Attribute = Par >> 56;
+    if (At == Page) FirstAttribute = Attribute;
     if ((Par & 1) || (Par & 0x0000FFFFFFFFF000ULL) != At ||
         (Attribute != 0xff && Attribute != 0x44)) Mapped = FALSE;
   }
@@ -56,7 +58,16 @@ STATIC VOID Houji26ReadPriorPanic(BOOLEAN RecoveryReady) {
     for (;;) gBS->Stall(1000000);
   }
   if (!Mapped || !hp26_valid(&Record, mHouji26PriorRunId)) {
-    Print(L"HOUJI26 PRIOR PANIC: prior record unavailable or overwritten; no error text accepted\n");
+    BOOLEAN Magic = CompareMem(Record.magic, "HJPAN026", 8) == 0;
+    BOOLEAN Trial = CompareMem(Record.run_id, mHouji26PriorRunId, 16) == 0;
+    BOOLEAN Integrity = hp26_crc(&Record) == Record.crc32;
+    BOOLEAN Empty = Mapped;
+    for (UINTN I = 0; I < sizeof(Record); ++I) if (((UINT8 *)&Record)[I]) Empty = FALSE;
+    if (Mapped && hp26_envelope(&Record, mHouji26PriorRunId) && !Record.length)
+      Print(L"HOUJI26 PRIOR PANIC: initialized record verified; no panic reason captured\n");
+    else
+      Print(L"HOUJI26 PRIOR PANIC: unavailable mapped=%u attr=%lx magic=%u trial=%u crc=%u zero=%u; no error text accepted\n",
+        Mapped, FirstAttribute, Magic, Trial, Integrity, Empty);
     return;
   }
   for (UINTN I = 0; I < Record.length; ++I)

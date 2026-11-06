@@ -56,6 +56,7 @@ CHECKS = (
     'ios26-trampoline.py',
     'ios26-root.py',
     'ios26-system.py',
+    'ios26-startup-results.py',
     'ios26-return.py',
     'ios26-present.py',
     'build-inputs.py',

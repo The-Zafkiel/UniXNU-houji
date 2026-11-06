@@ -11,6 +11,7 @@
 #include <kern/thread.h>
 #include <kern/processor.h>
 #include <kern/clock.h>
+#include <kern/debug.h>
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
 #include <sys/proc.h>
@@ -26,6 +27,44 @@ extern "C" uint32_t houji26_running_mask(void);
 extern "C" void houji26_irq_counts(unsigned cpu, uint64_t *timer, uint64_t *ipi);
 extern "C" processor_t thread_bind(processor_t processor);
 extern uint32_t processor_avail_count;
+
+/* Optional, finite PID1 bring-up results. No periodic or per-frame tracing. */
+extern "C" void houji_ufs_checkpoint(const char *, unsigned);
+static uint32_t bootResults, bootMainSeen;
+static bool bootResultsEnabled(void) {
+    int enabled = 0, native = 0, recovery = 0;
+    PE_parse_boot_argn("houji_pid1_startup", &enabled, sizeof(enabled));
+    PE_parse_boot_argn("houji_native_root", &native, sizeof(native));
+    PE_parse_boot_argn("houji_return_recovery", &recovery, sizeof(recovery));
+    return enabled == 1 && native == 1 && recovery == 1 && !panic_active() && ml_get_interrupts_enabled();
+}
+static void bootResult(const char *kind, const char *object, int result, const char *detail) {
+    if (!bootResultsEnabled()) return;
+    if (__atomic_fetch_add(&bootResults, 1U, __ATOMIC_ACQ_REL) >= 8) return;
+    char stage[768];
+    snprintf(stage, sizeof(stage), "HOUJI26 STARTUP RESULT: %s object=%.128s result=%d main=%u %.512s",
+        kind, object ? object : "", result, __atomic_load_n(&bootMainSeen, __ATOMIC_ACQUIRE), detail ? detail : "");
+    IOLog("%s\n", stage);
+    houji_ufs_checkpoint(stage, 0);
+}
+extern "C" void houji26_boot_exec(const char *path, int result, int before) {
+    if (!path || __atomic_load_n(&bootMainSeen, __ATOMIC_ACQUIRE)) return;
+    if (strcmp(path, "/sbin/launchd") && strcmp(path, "/redwood/sbin/init") &&
+        strcmp(path, "/sbin/launchd.ios")) return;
+    bootResult(before ? "pid1-exec-begin" : "pid1-exec-return", path, result, "");
+}
+static void bootMainWorker(void *, wait_result_t) {
+    bootResult("stock-launchd-main", "/sbin/launchd.ios", 0, "kernel initproc_spawned accepted");
+}
+extern "C" void houji26_boot_main(void) {
+    if (__atomic_exchange_n(&bootMainSeen, 1U, __ATOMIC_ACQ_REL)) return;
+    if (!bootResultsEnabled()) return;
+    thread_t thread = THREAD_NULL;
+    if (kernel_thread_start(bootMainWorker, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+}
+extern "C" void houji26_boot_reboot(const char *process, int options, const char *message) {
+    bootResult("userspace-reboot-request", process, options, message);
+}
 
 extern "C" uint64_t houji_cpu_idle_mach(int cpu) { return hakios_cpu_idle_mach(cpu); }
 extern "C" void houji_cpu_dvfs_start(void) { HoujiCpuDvfs::start(); }

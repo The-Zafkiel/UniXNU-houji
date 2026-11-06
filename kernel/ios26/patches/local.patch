@@ -1383,3 +1383,67 @@ diff --git a/osfmk/kern/debug.c b/osfmk/kern/debug.c
  		va_end(ap);
  		loader_log_line("\n== PANIC: ");
  		loader_log_line(rbuf);
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -6112,7 +6112,23 @@
+ 	muap.argp = uap->argp;
+ 	muap.envp = uap->envp;
+ 	muap.mac_p = USER_ADDR_NULL;
++#if HOUJI_IOS26
++	char houji_path[128] = {0};
++	bool houji_pid1 = proc_getpid(p) == 1;
++	if (houji_pid1) {
++		size_t copied = 0;
++		if (copyinstr(uap->fname, houji_path, sizeof(houji_path), &copied)) houji_path[0] = 0;
++		extern void houji26_boot_exec(const char *, int, int);
++		houji26_boot_exec(houji_path, 0, 1);
++	}
++#endif
+ 	err = __mac_execve(p, &muap, retval);
++#if HOUJI_IOS26
++	if (houji_pid1) {
++		extern void houji26_boot_exec(const char *, int, int);
++		houji26_boot_exec(houji_path, err, 0);
++	}
++#endif
+ 
+ 	return err;
+ }
+diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -1419,7 +1419,14 @@
+ 		// Can only ever be set by launchd, and only once at boot
+ 		return EPERM;
+ 	}
+-	return sysctl_handle_int(oidp, &initproc_spawned, 0, req);
++	int error = sysctl_handle_int(oidp, &initproc_spawned, 0, req);
++#if HOUJI_IOS26
++	if (!error && req->newptr != 0 && initproc_spawned == 1) {
++		extern void houji26_boot_main(void);
++		houji26_boot_main();
++	}
++#endif
++	return error;
+ }
+ 
+ SYSCTL_PROC(_kern, OID_AUTO, initproc_spawned,
+diff --git a/bsd/kern/kern_xxx.c b/bsd/kern/kern_xxx.c
+--- a/bsd/kern/kern_xxx.c
++++ b/bsd/kern/kern_xxx.c
+@@ -151,6 +151,14 @@
+ #endif
+ #endif
+ 	if (!error) {
++#if HOUJI_IOS26
++		/* Still normal syscall context, after authorization and message copyin,
++		 * before reboot_kernel can start a panic or shut down filesystem I/O. */
++		if (proc_getpid(p) == 1 || (uap->opt & RB_PANIC)) {
++			extern void houji26_boot_reboot(const char *, int, const char *);
++			houji26_boot_reboot(proc_best_name(p), uap->opt, message);
++		}
++#endif
+ 		OSBitOrAtomic(P_REBOOT, &p->p_flag);  /* No more signals for this proc */
+ 		error = reboot_kernel(uap->opt, message);
+ 	}

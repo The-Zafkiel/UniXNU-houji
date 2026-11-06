@@ -20,19 +20,21 @@ const void *houji26_panic_record(void);
 extern struct vc_info vinfo;
 extern unsigned char iso_font[256 * 16];
 static unsigned terminal_entered;
+static uint64_t trial_deadline;
 static Hjt26Reason first_panic __attribute__((aligned(16384)));
 
 const void *houji26_panic_record(void) { return &first_panic.record; }
-void houji26_capture_reason(const char *text) {
-    hjt26_capture(&first_panic, text, kHoujiZapTrial);
+static void flush_panic_record(void) {
     /* Normal RAM only. A reset may preserve this exact tagged record; the
      * next firmware can accept it only by trial identity and CRC. */
-    if (__atomic_load_n(&first_panic.state, __ATOMIC_ACQUIRE) == 2) {
-        uintptr_t at = (uintptr_t)&first_panic.record & ~(uintptr_t)63;
-        uintptr_t end = (uintptr_t)&first_panic.record + sizeof(first_panic.record);
-        for (; at < end; at += 64) __asm__ volatile("dc cvac, %0" : : "r"(at) : "memory");
-        __asm__ volatile("dsb sy" ::: "memory");
-    }
+    uintptr_t at = (uintptr_t)&first_panic.record & ~(uintptr_t)63;
+    uintptr_t end = (uintptr_t)&first_panic.record + sizeof(first_panic.record);
+    for (; at < end; at += 64) __asm__ volatile("dc cvac, %0" : : "r"(at) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+void houji26_capture_reason(const char *text) {
+    hjt26_capture(&first_panic, text, kHoujiZapTrial);
+    if (__atomic_load_n(&first_panic.state, __ATOMIC_ACQUIRE) == 2) flush_panic_record();
 }
 
 void houji26_finish_trial(unsigned reason) {
@@ -42,8 +44,13 @@ void houji26_finish_trial(unsigned reason) {
      * formatter's first reason before panic handling, including early panics. */
     if (__atomic_load_n(&first_panic.state, __ATOMIC_ACQUIRE) == 2) reason = 2;
     const char *title = reason == 1 ? "HOUJI IOS26: TIME LIMIT; RECOVERY IN 20S" :
-        reason == 2 ? "HOUJI IOS26: KERNEL PANIC" : "HOUJI IOS26: SYSTEM HALT OR RESTART";
-    const char *detail = "Returning to Recovery in 20 seconds.\n";
+        reason == 2 ? "HOUJI IOS26: KERNEL PANIC; RECOVERY IN 90S" : "HOUJI IOS26: SYSTEM HALT OR RESTART; RECOVERY IN 90S";
+    if (__atomic_load_n(&first_panic.state, __ATOMIC_ACQUIRE) == 0) {
+        hjt26_capture(&first_panic, title, kHoujiZapTrial);
+        if (__atomic_load_n(&first_panic.state, __ATOMIC_ACQUIRE) == 2) flush_panic_record();
+    }
+    const unsigned pause_seconds = reason == 1 ? 20 : 90;
+    const char *detail = reason == 1 ? "Returning to Recovery in 20 seconds.\n" : "Returning to Recovery in 90 seconds.\n";
     size_t detail_length = __builtin_strlen(detail);
     if (reason == 2 && __atomic_load_n(&first_panic.state, __ATOMIC_ACQUIRE) == 2) {
         detail = first_panic.record.text;
@@ -67,9 +74,14 @@ void houji26_finish_trial(unsigned reason) {
     }
     uint64_t frequency = __builtin_arm_rsr64("CNTFRQ_EL0");
     uint64_t started = __builtin_arm_rsr64("CNTPCT_EL0");
-    if (frequency >= 1000000 && frequency <= 1000000000)
-        while (__builtin_arm_rsr64("CNTPCT_EL0") - started < frequency * 20)
+    if (frequency >= 1000000 && frequency <= 1000000000) {
+        uint64_t duration = frequency * pause_seconds;
+        uint64_t deadline = __atomic_load_n(&trial_deadline, __ATOMIC_ACQUIRE);
+        if (deadline && (deadline <= started || deadline - started < duration))
+            duration = deadline <= started ? 0 : deadline - started;
+        while (__builtin_arm_rsr64("CNTPCT_EL0") - started < duration)
             __asm__ volatile("yield");
+    }
     houji26_reset_recovery();
 }
 
@@ -88,11 +100,19 @@ static void recovery_worker(void *context, wait_result_t result) {
     houji26_finish_trial(1);
 }
 void houji26_start_recovery_timer(void) {
+    hjt26_initialize(&first_panic, kHoujiZapTrial);
+    flush_panic_record();
     int requested = 0, seconds = 90;
     PE_parse_boot_argn("houji_return_recovery", &requested, sizeof(requested));
     if (requested != 1) return;
     PE_parse_boot_argn("houji_trial_seconds", &seconds, sizeof(seconds));
     if (seconds < 30 || seconds > 300) panic("HOUJI26: invalid recovery deadline");
+    uint64_t frequency = __builtin_arm_rsr64("CNTFRQ_EL0");
+    uint64_t counter = __builtin_arm_rsr64("CNTPCT_EL0");
+    if (frequency < 1000000 || frequency > 1000000000 ||
+        frequency * (unsigned)seconds > UINT64_MAX - counter)
+        panic("HOUJI26: invalid recovery counter");
+    __atomic_store_n(&trial_deadline, counter + frequency * (unsigned)seconds, __ATOMIC_RELEASE);
     thread_t thread = THREAD_NULL;
     if (kernel_thread_start(recovery_worker, (void *)(uintptr_t)seconds, &thread) != KERN_SUCCESS)
         panic("HOUJI26: cannot arm recovery deadline");

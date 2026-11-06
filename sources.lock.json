@@ -519,7 +519,10 @@
       "full_root_hfs_check": true,
       "reserved_nc_range_policy": true,
       "terminal_screen_bounds": true,
-      "panic_record_parser_and_bounds": true
+      "panic_record_parser_and_bounds": true,
+      "finite_pid1_startup_hooks_linked": true,
+      "initialized_panic_record_bounds": true,
+      "full_system_boot_epoch": true
     },
     "not_yet_qualified": [
       "stock iOS26 launchd, userland runtime and desktop",
@@ -536,7 +539,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v6-terminal-screen-cpu1",
+      "profile": "full-system-v7-bootstrap-before-PID1",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -546,7 +549,7 @@
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Fresh current-trial startup evidence again confirms native GPU 2D/coherence/provider qualification, retained ownership, HFS mount and /sbin/launchd attempt. Target was back in OrangeFox within 159 seconds; final on-screen reason is unavailable. No proof of PID1 execution, GUI, Metal shaders or eight-CPU progress.",
+      "result": "CRC-verified startup evidence confirms native 2D, eight WB/coherence renders, IOKit wrapper qualification, retained GPU owner/root/ring, HFS mount and /sbin/launchd attempt. No PID1 execution or GUI proof. Two later EFI-only reads passed memory-range/translation checks but did not recover matching prior-trial RAM contents.",
       "native_HFSX_mounted": true,
       "init_exec_attempted": true,
       "GPU_2D_startup_self_test": {
@@ -562,7 +565,12 @@
         "retained_owner_root_ring": true,
         "Metal_shaders_verified": false
       },
-      "recovery_seen_within_seconds": 159
+      "prior_panic_RAM_read": {
+        "EFI_only": true,
+        "Normal_WB_identity_mapping": true,
+        "record_identity_and_CRC_accepted": false,
+        "reason_retrieved": false
+      }
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -694,8 +702,10 @@
       },
       "flush_policy": "Only exact payload-free LUN0 SYNCHRONIZE CACHE is independent of write arming; WRITE10 retains the original arm and fixed logfs range",
       "reserved_nc_policy": "Current-trial HZR EFI/GCD/AT validation precedes one-time whitelist of exactly the metadata and fixed target 16K pages; WCOMB only, no padding/PIL-wide/kernel-RAM allowance; actual AT/PA checks retained",
-      "terminal_screen": "Existing mapped console and kernel font only; panic text or halt/deadline reason held for 20 seconds; no allocation, new mapping, UFS I/O or UEFI return; normal deadline includes display interval; hardware visibility pending",
-      "panic_reason_record": "First existing formatted panic reason in current-trial owned RAM only, trial-tagged CRC record. Existing startup-header reserved bytes carry the exact locator; no new file/write and no panic I/O. Optional next-firmware reader defaults off and requires owned/SystemMemory/free-page/AT/trial/CRC validation. Cross-reset retention unqualified."
+      "terminal_screen": "Existing mapped console and kernel font only; panic/halt visible up to 90 seconds, clamped to original trial deadline. Normal deadline includes its 20-second display. No panic allocation, new mapping, UFS I/O or UEFI return. Screen visibility remains unqualified.",
+      "panic_reason_record": "First formatted panic or handled terminal reason in owned RAM only, with current-trial identity and CRC; initialized-empty state is distinct. Exact locator is in existing startup header. Optional next-UEFI reader defaults off; bounds/translation/identity/CRC enforced. Current Recovery path did not retain a matching record, so no error reason recovered.",
+      "pid1_startup_results": "Optional houji_pid1_startup=1, default off; native-root and bounded-Recovery gates; up to eight approved PID1 exec/main and authorized reboot results in normal interruptible context only, using the existing startup file. No periodic runtime collector; successful exec is not EL0 execution proof.",
+      "calendar_source": "Fresh 64-bit host boot-epoch in chosen, consumed by GenericARMPE; unused iOS16 houji_epoch argument removed; no RTC qualification"
     },
     "minimum_device_result": {
       "kernel_entry_verified": true,

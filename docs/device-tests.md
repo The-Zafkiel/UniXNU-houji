@@ -1265,3 +1265,11 @@ OrangeFox，观察时 188 秒。首个程序的文件内容/识别继续查明�
 照片还暴露终止画面的字形镜像：XNU ISO 字体按 bit 0 从左向右，旧渲染误按 bit 7。
 已修正并用实际非对称 F 字形验证方向；下一轮复用同一有限 header 检查点，记录
 首 32 字节、文件长度与残余读取长度，仍不增加运行期采集。
+
+完整系统 v13 的 CRC 证明 `/sbin/launchd` 的首 32 字节全零、读长 16384 / resid 0，
+文件长度恰为整个设备的 34359738368 字节。VFS 源码确认动态注册的 HFS 排在
+静态 mockfs 后，后者对任意设备成功，并将整个设备作为单个 executable。因此先前
+“已挂载 HFS”的记录应撤回：实际通过的是物理根卷签名读取与块设备注册，根路径
+仍由 mockfs 提供。v14 选择策略限定 native_root=1 仅尝试 hfs，HFS 失败时也禁止
+回退到 mockfs，最小 RAM probe 的 native_root=0 保持原选择。IMG_0926 确认字形
+方向已正常，实际 panic 仍是 errno 8；ADSP 持续到 ready/GLINK/channel。

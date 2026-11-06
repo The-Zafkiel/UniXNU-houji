@@ -149,6 +149,12 @@ with tempfile.TemporaryDirectory(prefix='houji26-system-') as temporary:
                     '-I', str(ROOT / 'kernel/ios26/overlay/osfmk/arm64'),
                     str(ROOT / 'checks/ios26-terminal.c'), '-o', str(terminal)], check=True)
     subprocess.run([str(terminal)], check=True)
+    rootfs = temporary / 'rootfs'
+    subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                    '-I', str(ROOT / 'kernel/ios26/overlay/bsd/sys'),
+                    str(ROOT / 'checks/ios26-rootfs.c'), '-o', str(rootfs)], check=True)
+    subprocess.run([str(rootfs)], check=True)
     gfx = Path('iokit/Kernel/houji-ufs-root/HoujiGpuNativeGfx.inc')
     target = temporary / gfx;target.parent.mkdir(parents=True)
     target.write_bytes((ROOT / 'kernel/overlay' / gfx).read_bytes())
@@ -163,3 +169,4 @@ print('PASS: exact no-payload LUN0 flush survives a closed data-write gate; WRIT
 print('PASS: production reserved-NC policy publishes only two validated 16K pages, excludes padding/PIL neighbours/kernel RAM, rejects repeat registration and wrap, and retains HZR/AT checks; no GPU qualification')
 print('PASS: terminal renderer respects mapping capacity, visible pixels, stride padding, text bounds and invalid geometry; no panic-path I/O or display qualification')
 print('PASS: bounded first-panic RAM record rejects a different trial, corruption and invalid owned/system RAM ranges; kernel/firmware ABI matches; cross-reset retention unqualified')
+print('PASS: native HFS root selection skips an earlier always-successful mockfs, fails closed on HFS error and preserves the minimum RAM probe; host callback outcomes, no filesystem mount claim')

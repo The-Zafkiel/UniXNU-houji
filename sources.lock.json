@@ -525,7 +525,8 @@
       "full_system_boot_epoch": true,
       "coherence_precondition_fallback": true,
       "firmware_word_writes_and_AArch64_instructions": true,
-      "ISO_font_orientation": true
+      "ISO_font_orientation": true,
+      "native_HFS_root_selection": true
     },
     "not_yet_qualified": [
       "stock iOS26 launchd, userland runtime and desktop",
@@ -542,7 +543,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v12-ADSP-ready-PID1-ENOEXEC",
+      "profile": "full-system-v13-raw-volume-under-mockfs",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -552,8 +553,8 @@
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Current-trial CRC and user photo agree: ADSP DTB authentication/segment load, ADSP start, ready, GLINK and client channel progressed through stages 8-13 after aligned carveout writes. Initial PID1 exec returned ENOEXEC (8), with no Mach-O load-begin event. User photo confirms the matching kernel panic and bounded return to OrangeFox. Still no EL0/stock launchd/GUI/Metal shader proof.",
-      "native_HFSX_mounted": true,
+      "result": "Current-trial CRC confirms initial /sbin/launchd header is all zero and file size equals the whole 32 GiB device. Source registration order explains mockfs accepting the root before dynamically registered HFS; prior HFS mount claims were based on raw volume identity and are withdrawn. User photo verifies corrected glyph orientation and matching ENOEXEC. ADSP reaches ready/GLINK/client channel; no user execution, HFS mount, GUI or Metal shader proof.",
+      "native_HFSX_mounted": false,
       "init_exec_attempted": true,
       "GPU_2D_startup_self_test": {
         "PAS_authenticated": true,
@@ -584,9 +585,22 @@
         "vnode_header_ready": true,
         "image_activation_result": 8,
         "exec_result": 8,
-        "image_loaded": false
+        "image_loaded": false,
+        "header_words": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "file_bytes": 34359738368,
+        "read_bytes": 16384,
+        "read_resid": 0
       },
-      "recovery_seen_within_seconds": 188,
+      "recovery_seen_within_seconds": 182,
       "coherence_probe": {
         "status": 0,
         "phase": 6,
@@ -606,7 +620,8 @@
         "ready": true,
         "GLINK_and_channel_up": true,
         "battery_UI_verified": false
-      }
+      },
+      "terminal_orientation_verified": true
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -743,7 +758,8 @@
       "pid1_startup_results": "Optional houji_pid1_startup=1, default off; native-root and bounded-Recovery gates; up to eight approved PID1 exec/main and authorized reboot results in normal interruptible context only, using the existing startup file. No periodic runtime collector; successful exec is not EL0 execution proof.",
       "calendar_source": "Fresh 64-bit host boot-epoch in chosen, consumed by GenericARMPE; unused iOS16 houji_epoch argument removed; no RTC qualification",
       "coherence_fallback": "Only optional mode 5 status 11 with phase 3, valid views, eight inconclusive dirty-line attempts and no coherence work submitted. Require original idle owner, remove both probe mappings and clean/invalidate owned scratch before continuing mode 3 with coherence off. Any cleanup or other qualification failure retains terminal stop; hardware qualification pending.",
-      "ADSP_carveout_writes": "iOS26 only: bounded volatile aligned 32-bit stores, partial-word neighbor preservation, overflow checks; avoid bulk memcpy/bzero/DC ZVA on Device-typed reserved firmware RAM. Existing image placement/PAS/range rules and GPU NC whitelist unchanged. DTB metadata begin/accepted startup checkpoints distinguish PAS from segment writes; hardware qualification pending."
+      "ADSP_carveout_writes": "iOS26 only: bounded volatile aligned 32-bit stores, partial-word neighbor preservation, overflow checks; avoid bulk memcpy/bzero/DC ZVA on Device-typed reserved firmware RAM. Existing image placement/PAS/range rules and GPU NC whitelist unchanged. DTB metadata begin/accepted startup checkpoints distinguish PAS from segment writes; hardware qualification pending.",
+      "filesystem_selection": "houji_native_root=1 accepts only the registered hfs filesystem and refuses an alternate mountroot callback. No fallback to always-successful mockfs. RAM-only native_root=0 preserves prior filesystem selection. Mount callback type/result are printed at startup; actual HFS mount pending hardware."
     },
     "minimum_device_result": {
       "kernel_entry_verified": true,

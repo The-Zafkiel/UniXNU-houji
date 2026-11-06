@@ -288,3 +288,9 @@ ADSP 沿用的固件写入在 iOS26 单独适配：外部 carveout 的 WriteComb
 首尾部分字的相邻字节，拒绝地址/长度溢出。实际 AArch64 编译检查无 memcpy、
 bzero 或 DC ZVA。映射范围、MDT/PAS 资格和 GPU Normal-NC 白名单保持不变。
 DTB 元数据认证前后各有一次启动检查，运行期采集器仍关闭。
+
+根挂载证据修正：v13 的程序头与文件长度表明原生块设备曾被 mockfs 抢先接受，
+先前仅凭 HFSX 签名与 BSD root 设备名推断 HFS 已挂载并不成立。完整系统现在
+对 native_root=1 只选择动态注册的 hfs；HFS 错误不能静默落入 mockfs。最小
+RAM 单程序探针仍用原选择。只有实机出现 HFS callback 成功、正常文件长度及
+Mach-O 程序头，才能认定实际文件系统链条通过。

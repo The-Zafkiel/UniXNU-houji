@@ -482,7 +482,7 @@ index 9dbbd66..5c2870f 100644
  	mman_private.h \
  	monotonic.h \
 -	msgbuf.h \
-+	msgbuf.h memdev_ops.h redwood_input.h \
++	msgbuf.h memdev_ops.h redwood_input.h HoujiRootFs26.h \
  	eventvar.h \
  	persona.h \
  	preoslog.h \
@@ -1533,3 +1533,53 @@ diff --git a/bsd/kern/kern_xxx.c b/bsd/kern/kern_xxx.c
  		OSBitOrAtomic(P_REBOOT, &p->p_flag);  /* No more signals for this proc */
  		error = reboot_kernel(uap->opt, message);
  	}
+diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
+--- a/bsd/vfs/vfs_subr.c
++++ b/bsd/vfs/vfs_subr.c
+@@ -82,6 +82,10 @@
+ #include <sys/proc_internal.h>
+ #include <sys/kauth.h>
+ #include <sys/mount_internal.h>
++#if HOUJI_IOS26
++#include <pexpert/pexpert.h>
++#include <sys/HoujiRootFs26.h>
++#endif
+ #include <sys/time.h>
+ #include <sys/lock.h>
+ #include <sys/vnode.h>
+@@ -1211,6 +1215,14 @@
+ 	int     error;
+ 	mount_t mp;
+ 	vnode_t bdevvp_rootvp;
++#if HOUJI_IOS26
++	int houji_native_root = 0;
++	PE_parse_boot_argn("houji_native_root", &houji_native_root, sizeof(houji_native_root));
++	if (houji_native_root == 1 && mountroot != NULL) {
++		printf("HOUJI26 ROOTFS: native HFS root refuses alternate mountroot callback\n");
++		return EINVAL;
++	}
++#endif
+ 
+ 	/*
+ 	 * Reset any prior "unmounting everything" state.  This handles the
+@@ -1243,6 +1255,10 @@
+ 	bdevvp_rootvp = rootvp;
+ 
+ 	for (vfsp = vfsconf; vfsp; vfsp = vfsp->vfc_next) {
++#if HOUJI_IOS26
++		if (!hjrfs26_candidate(houji_native_root, vfsp->vfc_name)) continue;
++		if (houji_native_root == 1) printf("HOUJI26 ROOTFS: attempt=%s; mockfs fallback disabled\n", vfsp->vfc_name);
++#endif
+ 		if (vfsp->vfc_mountroot == NULL
+ 		    && !ISSET(vfsp->vfc_vfsflags, VFC_VFSCANMOUNTROOT)) {
+ 			continue;
+@@ -1257,6 +1273,9 @@
+ 			error = VFS_MOUNT(mp, rootvp, 0, ctx);
+ 		}
+ 
++#if HOUJI_IOS26
++		if (houji_native_root == 1) printf("HOUJI26 ROOTFS: callback=%s result=%d\n", vfsp->vfc_name, error);
++#endif
+ 		if (!error) {
+ 			if (bdevvp_rootvp != rootvp) {
+ 				/*

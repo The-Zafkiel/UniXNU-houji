@@ -3,8 +3,8 @@
   "board": "houji",
   "soc": "SM8650",
   "gpu": "Adreno 750",
-  "status": "uefi-first-entry-blocked-offline-work",
-  "hardware_boot_verified": false,
+  "status": "native-hfs-root-and-gpu-2d-verified-userland-pending",
+  "hardware_boot_verified": true,
   "userland": {
     "architecture": "arm64e",
     "product": "iPhone18,1",
@@ -51,8 +51,9 @@
     "architecture": "arm64e",
     "CPU_pages": 16384,
     "machine": "HOUJI",
-    "hardware_boot_verified": false,
+    "hardware_boot_verified": true,
     "darwin_version": "25.6.0"
   },
-  "testing_paused_by_user": true
+  "testing_paused_by_user": false,
+  "hardware_boot_scope": "RAM static arm64e PID1 and single-CPU HFS-root / dedicated GPU 2D startup; no stock launchd, desktop, Metal shader or eight-CPU qualification"
 }

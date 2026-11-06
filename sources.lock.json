@@ -465,7 +465,7 @@
   },
   "ios26": {
     "target_manifest": "targets/ios26.json",
-    "status": "native-arm64e-pid1-verified-offline-root-and-graphics-built",
+    "status": "native-hfs-root-and-gpu-2d-verified-userland-pending",
     "hardware_boot_verified": true,
     "reference": {
       "repository": "https://github.com/superboyyy/hakios-arm64e-dada",
@@ -517,11 +517,12 @@
       "arm64e_metal_bundle_build": true,
       "full_root_image_assembly": true,
       "full_root_hfs_check": true,
-      "reserved_nc_range_policy": true
+      "reserved_nc_range_policy": true,
+      "terminal_screen_bounds": true
     },
     "not_yet_qualified": [
-      "full iOS26 root boot, userland runtime and desktop",
-      "GPU submission/presentation and refresh on houji",
+      "stock iOS26 launchd, userland runtime and desktop",
+      "Metal shaders/presentation and refresh on houji",
       "multicore scheduler",
       "brightness/touch/battery and app runtime on iOS26"
     ],
@@ -534,7 +535,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v4-cpu1-control",
+      "profile": "full-system-v5-reserved-nc-cpu1",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -544,7 +545,22 @@
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Eight-CPU screen-marker trial reached actual kernel entry/bootstrap tables. Same-8GiB one-CPU control committed current-trial startup evidence then reset; GPU import refused metadata mapping at stage4/which0/page0. No desktop or render proof; eight-CPU progress remains unqualified."
+      "result": "Current-trial CRC-verified startup evidence confirms PAS authentication, three dedicated 2D submissions and fixed-image readback, retained GPU ownership and HFS root mount. Kernel attempted /sbin/launchd; user reported automatic Recovery. Final stop reason, stock launchd runtime, desktop, shaders and eight-CPU progress remain unqualified.",
+      "native_HFSX_mounted": true,
+      "init_exec_attempted": true,
+      "GPU_2D_startup_self_test": {
+        "PAS_authenticated": true,
+        "submit_kinds_passed": [
+          1,
+          2,
+          3
+        ],
+        "pixels_verified": 1024,
+        "markers_verified": 8,
+        "image_crc32": "e843b26a",
+        "retained_owner_root_ring": true,
+        "Metal_shaders_verified": false
+      }
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -675,7 +691,8 @@
         "white": "bootstrap page tables prepared before MMU enable"
       },
       "flush_policy": "Only exact payload-free LUN0 SYNCHRONIZE CACHE is independent of write arming; WRITE10 retains the original arm and fixed logfs range",
-      "reserved_nc_policy": "Current-trial HZR EFI/GCD/AT validation precedes one-time whitelist of exactly the metadata and fixed target 16K pages; WCOMB only, no padding/PIL-wide/kernel-RAM allowance; actual AT/PA checks retained"
+      "reserved_nc_policy": "Current-trial HZR EFI/GCD/AT validation precedes one-time whitelist of exactly the metadata and fixed target 16K pages; WCOMB only, no padding/PIL-wide/kernel-RAM allowance; actual AT/PA checks retained",
+      "terminal_screen": "Existing mapped console and kernel font only; panic text or halt/deadline reason held for 20 seconds; no allocation, new mapping, UFS I/O or UEFI return; normal deadline includes display interval; hardware visibility pending"
     },
     "minimum_device_result": {
       "kernel_entry_verified": true,
@@ -684,6 +701,6 @@
       "GUI_verified": false,
       "result": "2026-11-06 owner screen photo shows Darwin 25.6.0, initialized GIC/VM/IOKit/HFS and HOUJI IOS26 ARM64E PID1 REACHED. RAM-only one-CPU trial; no physical root install or runtime collectors."
     },
-    "hardware_boot_scope": "RAM static arm64e PID1 only; full-system boot still pending"
+    "hardware_boot_scope": "Native arm64e RAM PID1 verified; single-CPU / 8 GiB full-system trial mounted HFS root and passed dedicated GPU 2D startup self-test; stock launchd, GUI, Metal shaders and multicore remain unqualified"
   }
 }

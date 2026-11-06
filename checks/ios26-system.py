@@ -140,6 +140,12 @@ with tempfile.TemporaryDirectory(prefix='houji26-system-') as temporary:
                     '-I', str(ROOT / 'kernel/ios26/overlay/osfmk/arm64'),
                     str(ROOT / 'checks/ios26-reserved-nc.c'), '-o', str(reserved)], check=True)
     subprocess.run([str(reserved)], check=True)
+    terminal = temporary / 'terminal'
+    subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                    '-I', str(ROOT / 'kernel/ios26/overlay/osfmk/arm64'),
+                    str(ROOT / 'checks/ios26-terminal.c'), '-o', str(terminal)], check=True)
+    subprocess.run([str(terminal)], check=True)
     gfx = Path('iokit/Kernel/houji-ufs-root/HoujiGpuNativeGfx.inc')
     target = temporary / gfx;target.parent.mkdir(parents=True)
     target.write_bytes((ROOT / 'kernel/overlay' / gfx).read_bytes())
@@ -152,3 +158,4 @@ print('PASS: production full-system ADT preserves houji hardware, validates CPU/
 print('PASS: production early-failure recovery requires exact live BCB readback, preserves status, waits ten seconds, retains handlers and performs no writes; host callbacks only')
 print('PASS: exact no-payload LUN0 flush survives a closed data-write gate; WRITE10 still requires arming and its bounded range; no firmware emulation')
 print('PASS: production reserved-NC policy publishes only two validated 16K pages, excludes padding/PIL neighbours/kernel RAM, rejects repeat registration and wrap, and retains HZR/AT checks; no GPU qualification')
+print('PASS: terminal renderer respects mapping capacity, visible pixels, stride padding, text bounds and invalid geometry; no panic-path I/O or display qualification')

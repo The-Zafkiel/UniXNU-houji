@@ -1206,8 +1206,8 @@ index b879367..b16c057 100644
  loader_return(void)
  {
 +#if HOUJI_IOS26
-+    extern void houji26_reset_recovery(void) __attribute__((noreturn));
-+    if (loader_stub_slot[1] == 0) houji26_reset_recovery();
++    extern void houji26_finish_trial(unsigned) __attribute__((noreturn));
++    if (loader_stub_slot[1] == 0) houji26_finish_trial(panic_active() ? 2 : 3);
 +#endif
  	redwood_ufs_close();             /* no read of the storage in flight from here on */
  #if defined(GENERIC_PSCI_SMP)

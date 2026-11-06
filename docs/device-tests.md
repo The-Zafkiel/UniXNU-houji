@@ -1195,4 +1195,18 @@ logfs LBA 范围与传输长度检查均保留。这个错误的存在不足以�
 专用 DMA 窗口覆盖的地址映射为 Device。houji 的 ZAP 元数据和目标预留页位于该
 窗口外，严格的 Normal-NC/真实 PA 校验拒绝继续。修正只在完整本轮 HZR 记录及
 EFI/GCD/AT 证明通过后，一次性登记这两个 16 KiB 页；raw 对齐填充、PIL 其余区域、
-内核 RAM 和周围 MMIO 均不增加映射资格，原先实际 AT 校验保留。该修正待实机验证。
+内核 RAM 和周围 MMIO 均不增加映射资格，原先实际 AT 校验保留。
+
+## iOS26 原生 2D 自检与 HFS 根卷 · 2026-11-06
+
+保持单核 / 8 GiB、原启动资格检查及关闭运行期采集器，重新绑定一次性启动材料后，
+预留页修正版已通过 PAS 认证及三种原生 2D 提交。Recovery 中核对本轮固定启动
+检查的身份、头和载荷 CRC 后，确认 `code=0`、三个 idle 条件成立，1,024 像素与
+8 个标记回读通过，图像 CRC 为 `e843b26a`。原 owner、GPU root、ring 保持有效，
+live provider 发布；仅证明独立 2D 自检，不证明 Metal shader 或系统合成。
+
+同一记录确认 `vfs_mountroot`、`mountroot_post_hook` 及 `bsd_do_post` 已越过，
+随后尝试 `/sbin/launchd`。没有 stock launchd 成功运行、锁屏或桌面证据。用户报告
+自动回到 OrangeFox，最后终止原因没有留在现有固定启动记录中，不能据此指定为
+panic 或正常测试定时结束。下一轮增加无存储 I/O 的终止画面，显示已有 panic 文本
+并保留 20 秒；显示边界检查与实际内核链接已通过，实机可见性尚待确认。

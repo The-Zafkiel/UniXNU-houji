@@ -1515,6 +1515,30 @@ diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
  }
  
  SYSCTL_PROC(_kern, OID_AUTO, initproc_spawned,
+@@ -2002,6 +2009,23 @@
+ #endif /* DEVELOPMENT */
+ 
+ 	char *exit_reason_desc = exit_reason_get_string_desc(p->p_exit_reason);
++#if HOUJI_IOS26
++	if (p == initproc) {
++		unsigned desc_bytes = 0;
++		if (exit_reason_desc && p->p_exit_reason != OS_REASON_NULL) {
++			uintptr_t base = (uintptr_t)p->p_exit_reason->osr_kcd_buf;
++			uintptr_t desc = (uintptr_t)exit_reason_desc;
++			if (desc >= base && desc - base < p->p_exit_reason->osr_bufsize) {
++				uint64_t remaining = p->p_exit_reason->osr_bufsize - (desc - base);
++				desc_bytes = remaining < 512 ? (unsigned)remaining : 512;
++			}
++		}
++		extern void houji26_boot_exit(unsigned, uint64_t, int, const char *, unsigned);
++		houji26_boot_exit(p->p_exit_reason == OS_REASON_NULL ? 0 : p->p_exit_reason->osr_namespace,
++		    p->p_exit_reason == OS_REASON_NULL ? 0 : p->p_exit_reason->osr_code,
++		    rv, exit_reason_desc, desc_bytes);
++	}
++#endif
+ 
+ 	if (p->p_exit_reason == OS_REASON_NULL) {
+ 		printf("pid %d exited -- no exit reason available -- (signal %d, exit %d)\n",
 diff --git a/bsd/kern/kern_xxx.c b/bsd/kern/kern_xxx.c
 --- a/bsd/kern/kern_xxx.c
 +++ b/bsd/kern/kern_xxx.c

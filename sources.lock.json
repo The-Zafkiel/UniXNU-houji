@@ -526,10 +526,11 @@
       "coherence_precondition_fallback": true,
       "firmware_word_writes_and_AArch64_instructions": true,
       "ISO_font_orientation": true,
-      "native_HFS_root_selection": true
+      "native_HFS_root_selection": true,
+      "reserved_PID1_exit_checkpoint": true
     },
     "not_yet_qualified": [
-      "stock iOS26 launchd, userland runtime and desktop",
+      "stock iOS26 launchd main, services and desktop runtime",
       "Metal shaders/presentation and refresh on houji",
       "multicore scheduler",
       "brightness/touch/battery and app runtime on iOS26"
@@ -543,18 +544,18 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v13-raw-volume-under-mockfs",
+      "profile": "full-system-v14-HFS-EL0-dyld-missing-library",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
       "logical_cpus_verified": 1,
       "CPU0_timer_verified": true,
       "startup_checkpoint_CRC_verified": true,
-      "user_entry_verified": false,
+      "user_entry_verified": true,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Current-trial CRC confirms initial /sbin/launchd header is all zero and file size equals the whole 32 GiB device. Source registration order explains mockfs accepting the root before dynamically registered HFS; prior HFS mount claims were based on raw volume identity and are withdrawn. User photo verifies corrected glyph orientation and matching ENOEXEC. ADSP reaches ready/GLINK/client channel; no user execution, HFS mount, GUI or Metal shader proof.",
-      "native_HFSX_mounted": false,
+      "result": "Current-trial CRC confirms hfs callback 0, ordinary /sbin/launchd size 33680 and valid arm64e Mach-O, successful image load/signature checks. User photo shows stock /sbin/launchd.ios reached dyld then exited with namespace 6/code 1 because libSystem.B.dylib was unavailable. This proves stage0/helper EL0 progression, not stock launchd main or desktop. Restore canonical preboot cryptex paths and stock symlinks; reserve a normal-context PID1 terminal reason checkpoint.",
+      "native_HFSX_mounted": true,
       "init_exec_attempted": true,
       "GPU_2D_startup_self_test": {
         "PAS_authenticated": true,
@@ -579,28 +580,28 @@
         "initial_exec_begin": true,
         "clone_ready": true,
         "image_activation_observed": true,
-        "exec_return_observed": true,
-        "helper_init_observed": false,
+        "exec_return_observed": false,
+        "helper_init_observed": true,
         "stock_launchd_main_observed": false,
         "vnode_header_ready": true,
-        "image_activation_result": 8,
-        "exec_result": 8,
-        "image_loaded": false,
+        "image_activation_result": 0,
+        "exec_result": 0,
+        "image_loaded": true,
         "header_words": [
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
+          4277009103,
+          16777228,
+          2147483650,
+          2,
+          9,
+          976,
+          1,
           0
         ],
-        "file_bytes": 34359738368,
+        "file_bytes": 33680,
         "read_bytes": 16384,
         "read_resid": 0
       },
-      "recovery_seen_within_seconds": 182,
+      "recovery_seen_within_seconds": 242,
       "coherence_probe": {
         "status": 0,
         "phase": 6,
@@ -621,7 +622,9 @@
         "GLINK_and_channel_up": true,
         "battery_UI_verified": false
       },
-      "terminal_orientation_verified": true
+      "terminal_orientation_verified": true,
+      "stock_launchd_dyld_reached": true,
+      "stock_launchd_main_verified": false
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -729,7 +732,16 @@
         "installed": false,
         "phone_accessed": false
       },
-      "root_installed_and_readback_verified": true
+      "root_installed_and_readback_verified": true,
+      "cryptex_layout_candidate": {
+        "sha256": "e47367ae0ad2acf76a19973048a2d82cc25eabcd1945202f265b5dc369d08e51",
+        "bytes": 34359738368,
+        "canonical_paths": true,
+        "stock_aliases_and_numeric_owners": true,
+        "shared_cache_files_unchanged": 86,
+        "filesystem_check": "PASS",
+        "installed_or_booted": false
+      }
     },
     "full_system_boot": {
       "adt_builder": "tools/make-ios26-system-adt.py",
@@ -755,11 +767,12 @@
       "reserved_nc_policy": "Current-trial HZR EFI/GCD/AT validation precedes one-time whitelist of exactly the metadata and fixed target 16K pages; WCOMB only, no padding/PIL-wide/kernel-RAM allowance; actual AT/PA checks retained",
       "terminal_screen": "Existing mapped console and XNU ISO font; corrected LSB-first glyph bit order. Panic/halt up to 90 seconds within original deadline; no panic allocation, remapping, UFS I/O or UEFI return. User photo verified old mirrored panic text and matching ENOEXEC; corrected on-device orientation awaits next trial.",
       "panic_reason_record": "First formatted panic or handled terminal reason in owned RAM only, with current-trial identity and CRC; initialized-empty state is distinct. Exact locator is in existing startup header. Optional next-UEFI reader defaults off; bounds/translation/identity/CRC enforced. Current Recovery path did not retain a matching record, so no error reason recovered.",
-      "pid1_startup_results": "Optional houji_pid1_startup=1, default off; native-root and bounded-Recovery gates; up to eight approved PID1 exec/main and authorized reboot results in normal interruptible context only, using the existing startup file. No periodic runtime collector; successful exec is not EL0 execution proof.",
+      "pid1_startup_results": "Optional default-off houji_pid1_startup=1; native-root and bounded-Recovery gates. Seven normal startup results plus one reserved first critical-exit/authorized-reboot reason. PID1 exit payload is read only within the validated kernel reason buffer, before coredump/sync/panic in normal context. No periodic collector or panic I/O; arbitrary kernel panic persistence is not guaranteed. Detailed vnode/Mach-O phases additionally require houji_pid1_detail=1; the default finite profile records the three exec transitions, stock main and the reserved terminal reason.",
       "calendar_source": "Fresh 64-bit host boot-epoch in chosen, consumed by GenericARMPE; unused iOS16 houji_epoch argument removed; no RTC qualification",
       "coherence_fallback": "Only optional mode 5 status 11 with phase 3, valid views, eight inconclusive dirty-line attempts and no coherence work submitted. Require original idle owner, remove both probe mappings and clean/invalidate owned scratch before continuing mode 3 with coherence off. Any cleanup or other qualification failure retains terminal stop; hardware qualification pending.",
       "ADSP_carveout_writes": "iOS26 only: bounded volatile aligned 32-bit stores, partial-word neighbor preservation, overflow checks; avoid bulk memcpy/bzero/DC ZVA on Device-typed reserved firmware RAM. Existing image placement/PAS/range rules and GPU NC whitelist unchanged. DTB metadata begin/accepted startup checkpoints distinguish PAS from segment writes; hardware qualification pending.",
-      "filesystem_selection": "houji_native_root=1 accepts only the registered hfs filesystem and refuses an alternate mountroot callback. No fallback to always-successful mockfs. RAM-only native_root=0 preserves prior filesystem selection. Mount callback type/result are printed at startup; actual HFS mount pending hardware."
+      "filesystem_selection": "houji_native_root=1 accepts only the registered hfs filesystem and refuses an alternate mountroot callback. No fallback to always-successful mockfs. RAM-only native_root=0 preserves prior filesystem selection. Mount callback type/result are printed at startup; actual HFS mount pending hardware.",
+      "cryptex_layout": "OS/App contents belong at private/preboot/Cryptexes/{OS,App}; preserve stock System/Cryptexes relative symlinks. Verify alias containment and canonical arm64e cache header; full donor bytes/subcaches retain original hashes. Corrected local image hardware qualification pending."
     },
     "minimum_device_result": {
       "kernel_entry_verified": true,

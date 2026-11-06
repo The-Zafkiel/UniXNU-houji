@@ -20,7 +20,7 @@ using wait_result_t = int;
 constexpr thread_t THREAD_NULL = nullptr;
 constexpr int KERN_SUCCESS = 0;
 using entry_t = void (*)(void *, wait_result_t);
-static int enabled, native_root, recovery, panic_state, thread_error;
+static int enabled, native_root, recovery, detail, panic_state, thread_error;
 static bool interruptible = true;
 static unsigned thread_calls, log_calls;
 static entry_t queued;
@@ -28,7 +28,8 @@ static std::vector<std::string> writes;
 static bool PE_parse_boot_argn(const char *name, void *value, int size) {
     assert(size == sizeof(int));
     int result = !strcmp(name,"houji_pid1_startup") ? enabled :
-        !strcmp(name,"houji_native_root") ? native_root : recovery;
+        !strcmp(name,"houji_native_root") ? native_root :
+        !strcmp(name,"houji_pid1_detail") ? detail : recovery;
     memcpy(value, &result, sizeof result); return true;
 }
 static unsigned panic_active() { return panic_state; }
@@ -47,8 +48,8 @@ static void thread_deallocate(thread_t thread) { assert(thread == (void *)1); }
 unit += source[start:end]
 unit += r'''
 static void reset() {
-    enabled = native_root = recovery = 1; panic_state = thread_error = 0;
-    interruptible = true; thread_calls = log_calls = bootResults = bootMainSeen = 0;
+    enabled = native_root = recovery = detail = 1; panic_state = thread_error = 0;
+    interruptible = true; thread_calls = log_calls = bootResults = bootMainSeen = bootTerminalResult = 0;
     queued = nullptr; writes.clear();
 }
 int main() {
@@ -61,6 +62,7 @@ int main() {
         if(gate==4) interruptible=false;
         houji26_boot_exec("/sbin/launchd",8,0);
         houji26_boot_reboot("launchd",8,"reason");
+        houji26_boot_exit(6,1,6,"dyld failure",12);
         houji26_boot_main();
         assert(writes.empty() && !log_calls && !thread_calls);
     }
@@ -104,6 +106,23 @@ int main() {
     houji26_boot_header("/sbin/launchd",header,16384,0,33680);
     assert(writes.size()==1 && writes[0].find("header=feedfacf,0100000c,80000002,00000002")!=std::string::npos);
     assert(writes[0].find("read=16384 resid=0 file-bytes=33680")!=std::string::npos);
+    reset();
+    for(int phase=1;phase<=8;++phase) houji26_boot_exec("/sbin/launchd",0,phase);
+    assert(writes.size()==7);
+    const char bounded[3]={'L','i','b'};
+    houji26_boot_exit(6,1,6,bounded,sizeof(bounded));
+    assert(writes.size()==8 && writes.back().find("namespace=6 subcode=1 description=Lib")!=std::string::npos);
+    houji26_boot_exit(6,2,6,"later reason",12);
+    assert(writes.size()==8 && writes.back().find("description=Lib")!=std::string::npos);
+    reset();detail=0;
+    for(int phase=2;phase<=8;phase++)houji26_boot_exec("/sbin/launchd",0,phase);
+    houji26_boot_header("/sbin/launchd",header,16384,0,33680);
+    assert(writes.empty());
+    for(const char *path:{"/sbin/launchd","/redwood/sbin/init","/sbin/launchd.ios"}){
+        houji26_boot_exec(path,0,1);houji26_boot_exec(path,0,0);
+    }
+    houji26_boot_main();queued(nullptr,0);assert(writes.size()==7);
+    houji26_boot_exit(6,1,6,"Library not loaded",18);assert(writes.size()==8);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='houji26-startup-results-') as name:
@@ -114,4 +133,4 @@ with tempfile.TemporaryDirectory(prefix='houji26-startup-results-') as name:
                     '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                     str(cpp), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
-print('PASS: actual startup writer requires all boot gates and normal context, bounds eight records, filters paths, defers main notification and preserves disabled/failed-worker behavior; host peers, no device or GPU')
+print('PASS: actual startup writer requires all boot gates and normal context, reserves one terminal reason within eight records, bounds reason reads, filters paths, defers main notification and preserves disabled/failed-worker behavior; host peers, no device or GPU')

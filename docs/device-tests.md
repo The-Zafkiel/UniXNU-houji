@@ -1273,3 +1273,20 @@ OrangeFox，观察时 188 秒。首个程序的文件内容/识别继续查明�
 仍由 mockfs 提供。v14 选择策略限定 native_root=1 仅尝试 hfs，HFS 失败时也禁止
 回退到 mockfs，最小 RAM probe 的 native_root=0 保持原选择。IMG_0926 确认字形
 方向已正常，实际 panic 仍是 errno 8；ADSP 持续到 ready/GLINK/channel。
+
+完整系统 v14 的本轮 CRC 确认 hfs callback=0，`/sbin/launchd` 恢复为 33680 字节，
+程序头 `feedfacf / arm64e / MH_EXECUTE`，映像装载、激活和签名检查均返回 0。
+IMG_0927 随后显示 `/sbin/launchd.ios` 的 dyld 原因：namespace 6 / code 1，
+`/usr/lib/libSystem.B.dylib` 不可用。由此可确认 stage0 和辅助 init 的 EL0 链已走到
+原版 launchd 的动态加载器，不能当作 launchd main 或桌面。观察时 242 秒在 Recovery，
+回收后全部 256 个根卷分块仍与 v3 镜像一致。
+原固定文件的八条额度在首个 exec 用完，没有这条终止原因；下一版保留七条普通
+节点及一条 critical-exit/reboot 专用名额，在已有正常退出路径的 coredump/sync/panic
+之前记录内核已验证、有界的 reason 描述。任意内核 panic 仍不保证持久化。
+同时修正镜像 Cryptex 布局：OS/App 放到 canonical preboot 目录，保留原始
+System/Cryptexes 链接；在本地独立副本移动目录，缓存文件字节保持原值，待实机验证。
+
+Cryptex 布局修正候选 v4 在独立本地副本完成，86 个共享缓存哈希与供体相同，
+canonical 路径、原始链接和数字所有权通过检查；磁盘映像设备上的文件系统检查
+通过。SHA-256 为 e47367ae0ad2acf76a19973048a2d82cc25eabcd1945202f265b5dc369d08e51。
+此处仍是离线候选，不能据此宣称 dyld 或桌面已通过。

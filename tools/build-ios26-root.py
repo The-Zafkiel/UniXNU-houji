@@ -73,6 +73,25 @@ def replace_directory(root, relative):
     return target
 
 
+def verify_cryptex_views(root):
+    root = root.resolve()
+    for name in ('OS', 'App'):
+        relative = Path('private/preboot/Cryptexes') / name
+        canonical = root / relative
+        alias = root / 'System/Cryptexes' / name
+        expected = '../../private/preboot/Cryptexes/' + name
+        if (canonical.is_symlink() or not canonical.is_dir() or
+                canonical.resolve() != root / relative or not alias.is_symlink() or
+                os.readlink(alias) != expected or alias.resolve() != canonical):
+            raise ValueError('Cryptex canonical path or stock alias is invalid: ' + name)
+    cache = root / 'private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld'
+    ordinary_file(cache / 'dyld_shared_cache_arm64e')
+    with (cache / 'dyld_shared_cache_arm64e').open('rb') as stream:
+        magic = stream.read(16)
+    if not magic.startswith(b'dyld_v1') or b'arm64e' not in magic:
+        raise ValueError('Expected the arm64e shared cache at its canonical preboot path')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--baseline', type=Path, required=True, help='Verified immutable 32 GiB Recovery snapshot')
@@ -165,11 +184,12 @@ def main():
                             str(source) + '/', str(destination) + '/'], check=True)
         print('Copying full donor OS into isolated HFSX image', flush=True)
         copy_tree(a.system_root, mount, '--exclude=/private/var/staged_system_apps')
-        for source, relative in [(a.cryptex_os, 'System/Cryptexes/OS'),
-                                 (a.cryptex_app, 'System/Cryptexes/App'),
+        for source, relative in [(a.cryptex_os, 'private/preboot/Cryptexes/OS'),
+                                 (a.cryptex_app, 'private/preboot/Cryptexes/App'),
                                  (a.exclave, 'private/preboot/Cryptexes/ExclaveOS')]:
             destination = replace_directory(mount, relative)
             copy_tree(source, destination)
+        verify_cryptex_views(mount)
         applications = directory_in_root(mount, 'Applications')
         for app in (a.system_root / 'private/var/staged_system_apps').iterdir():
             target = applications / app.name
@@ -243,10 +263,10 @@ def main():
         verified = 0
         skip = ('sbin/launchd', 'System/Library/LaunchDaemons', 'System/Library/NanoLaunchDaemons',
                 'System/Library/LaunchAngels', 'System/Library/xpc/launchd.plist', 'private/var/staged_system_apps',
-                'System/Cryptexes/OS', 'System/Cryptexes/App', 'private/preboot/Cryptexes/ExclaveOS')
+                'private/preboot/Cryptexes/OS', 'private/preboot/Cryptexes/App', 'private/preboot/Cryptexes/ExclaveOS')
         for source, target, exclusions in [(a.system_root, mount, skip),
-                (a.cryptex_os, mount / 'System/Cryptexes/OS', ()),
-                (a.cryptex_app, mount / 'System/Cryptexes/App', ()),
+                (a.cryptex_os, mount / 'private/preboot/Cryptexes/OS', ()),
+                (a.cryptex_app, mount / 'private/preboot/Cryptexes/App', ()),
                 (a.exclave, mount / 'private/preboot/Cryptexes/ExclaveOS', ())]:
             for parent, directories, files in os.walk(source, followlinks=False):
                 relparent = Path(parent).relative_to(source)

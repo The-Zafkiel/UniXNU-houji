@@ -294,3 +294,16 @@ DTB 元数据认证前后各有一次启动检查，运行期采集器仍关闭�
 对 native_root=1 只选择动态注册的 hfs；HFS 错误不能静默落入 mockfs。最小
 RAM 单程序探针仍用原选择。只有实机出现 HFS callback 成功、正常文件长度及
 Mach-O 程序头，才能认定实际文件系统链条通过。
+
+最新实机已确认 HFS callback 成功、首个文件的正常长度/arm64e Mach-O 头及
+EL0 辅助链；原版 launchd 进入 dyld 后因 libSystem 不可用终止，尚未到 main。
+Cryptex 内容需放在 `/private/preboot/Cryptexes/{OS,App}`，并保留供体的
+`/System/Cryptexes` 相对链接；只将内容放进替换后的 System 实体目录会遗漏
+canonical preboot 视图。镜像作者现在检查这两个视图和 arm64e cache header。
+有限启动记录改为七个普通节点加一个首条 critical-exit/reboot 原因，仍最多八条；
+退出描述在内核已验证 reason buffer 内截断，只在正常上下文保存，panic 不写盘。
+
+`houji_pid1_detail=1` 才开启已用于定位初始程序头的深层装载节点。默认有限记录
+仅覆盖三个 exec 的开始/返回与 stock main，给后续链条留出七条普通额度；退出
+原因始终有一条独立保留名额。新本地 v4 镜像已经验证两处 canonical Cryptex
+视图、原始链接/数字所有者、86 个未改动的共享缓存文件及文件系统，尚待安装启动。

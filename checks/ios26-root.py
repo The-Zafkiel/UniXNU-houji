@@ -40,6 +40,23 @@ with tempfile.TemporaryDirectory(prefix='houji26-root-') as temporary:
     alias.symlink_to(real)
     rejected(module.ordinary_file, alias)
     rejected(module.ordinary_file, Path('/dev/null'))
+    for name in ('OS', 'App'):
+        (image / 'private/preboot/Cryptexes' / name).mkdir(parents=True)
+    (image / 'System/Cryptexes').mkdir(parents=True)
+    for name in ('OS', 'App'):
+        (image / 'System/Cryptexes' / name).symlink_to('../../private/preboot/Cryptexes/' + name)
+    cache = image / 'private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld'
+    cache.mkdir(parents=True)
+    main_cache = cache / 'dyld_shared_cache_arm64e'
+    main_cache.write_bytes(b'dyld_v1  arm64e\0\0')
+    module.verify_cryptex_views(image)
+    (image / 'System/Cryptexes/OS').unlink()
+    (image / 'System/Cryptexes/OS').symlink_to(str(outside))
+    rejected(module.verify_cryptex_views, image)
+    (image / 'System/Cryptexes/OS').unlink()
+    (image / 'System/Cryptexes/OS').symlink_to('../../private/preboot/Cryptexes/OS')
+    main_cache.write_bytes(b'dyld_v1   arm64\0\0')
+    rejected(module.verify_cryptex_views, image)
     valid = {'BusProtocol': 'Disk Image', 'MountPoint': str(image), 'Writable': False}
     with patch.object(module, 'run', return_value=plistlib.dumps(valid)):
         module.mounted_image(image, False)

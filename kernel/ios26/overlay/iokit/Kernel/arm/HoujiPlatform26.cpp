@@ -30,7 +30,7 @@ extern uint32_t processor_avail_count;
 
 /* Optional, finite PID1 bring-up results. No periodic or per-frame tracing. */
 extern "C" void houji_ufs_checkpoint(const char *, unsigned);
-static uint32_t bootResults, bootMainSeen;
+static uint32_t bootResults, bootMainSeen, bootTerminalResult;
 static bool bootResultsEnabled(void) {
     int enabled = 0, native = 0, recovery = 0;
     PE_parse_boot_argn("houji_pid1_startup", &enabled, sizeof(enabled));
@@ -38,9 +38,16 @@ static bool bootResultsEnabled(void) {
     PE_parse_boot_argn("houji_return_recovery", &recovery, sizeof(recovery));
     return enabled == 1 && native == 1 && recovery == 1 && !panic_active() && ml_get_interrupts_enabled();
 }
-static void bootResult(const char *kind, const char *object, int result, const char *detail) {
+static bool bootDetailsEnabled(void) {
+    int detail = 0;
+    PE_parse_boot_argn("houji_pid1_detail", &detail, sizeof(detail));
+    return detail == 1;
+}
+static void bootResult(const char *kind, const char *object, int result, const char *detail, bool terminal = false) {
     if (!bootResultsEnabled()) return;
-    if (__atomic_fetch_add(&bootResults, 1U, __ATOMIC_ACQ_REL) >= 8) return;
+    if (terminal) {
+        if (__atomic_exchange_n(&bootTerminalResult, 1U, __ATOMIC_ACQ_REL)) return;
+    } else if (__atomic_fetch_add(&bootResults, 1U, __ATOMIC_ACQ_REL) >= 7) return;
     char stage[768];
     snprintf(stage, sizeof(stage), "HOUJI26 STARTUP RESULT: %s object=%.128s result=%d main=%u %.512s",
         kind, object ? object : "", result, __atomic_load_n(&bootMainSeen, __ATOMIC_ACQUIRE), detail ? detail : "");
@@ -55,10 +62,11 @@ extern "C" void houji26_boot_exec(const char *path, int result, int phase) {
         "pid1-image-activated", "pid1-signature-checked", "pid1-exec-ready",
         "pid1-vnode-header-ready", "pid1-macho-load-begin", "pid1-macho-load-end"};
     if (phase < 0 || static_cast<unsigned>(phase) >= sizeof(kinds) / sizeof(kinds[0])) return;
+    if (phase >= 2 && !bootDetailsEnabled()) return;
     bootResult(kinds[phase], path, result, "");
 }
 extern "C" void houji26_boot_header(const char *path, const void *data, unsigned bytes, int resid, uint64_t file_bytes) {
-    if (!bootResultsEnabled() || !path || !data || bytes < 32 || resid < 0 || static_cast<unsigned>(resid) > bytes ||
+    if (!bootResultsEnabled() || !bootDetailsEnabled() || !path || !data || bytes < 32 || resid < 0 || static_cast<unsigned>(resid) > bytes ||
         __atomic_load_n(&bootMainSeen, __ATOMIC_ACQUIRE)) return;
     if (strcmp(path, "/sbin/launchd") && strcmp(path, "/redwood/sbin/init") && strcmp(path, "/sbin/launchd.ios")) return;
     uint32_t words[8]; memcpy(words, data, sizeof(words));
@@ -77,7 +85,16 @@ extern "C" void houji26_boot_main(void) {
     if (kernel_thread_start(bootMainWorker, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 extern "C" void houji26_boot_reboot(const char *process, int options, const char *message) {
-    bootResult("userspace-reboot-request", process, options, message);
+    bootResult("userspace-reboot-request", process, options, message, true);
+}
+extern "C" void houji26_boot_exit(unsigned name_space, uint64_t code, int status, const char *description, unsigned bytes) {
+    if (!bootResultsEnabled()) return;
+    if (bytes > 512) bytes = 512;
+    if (!description) bytes = 0;
+    char detail[640];
+    snprintf(detail, sizeof(detail), "namespace=%u subcode=%llx description=%.*s", name_space,
+        (unsigned long long)code, bytes ? (int)bytes : 4, bytes ? description : "none");
+    bootResult("pid1-critical-exit", "initproc", status, detail, true);
 }
 
 extern "C" uint64_t houji_cpu_idle_mach(int cpu) { return hakios_cpu_idle_mach(cpu); }

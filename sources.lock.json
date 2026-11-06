@@ -539,7 +539,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v7-bootstrap-before-PID1",
+      "profile": "full-system-v8-first-PID1-exec",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -549,7 +549,7 @@
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "CRC-verified startup evidence confirms native 2D, eight WB/coherence renders, IOKit wrapper qualification, retained GPU owner/root/ring, HFS mount and /sbin/launchd attempt. No PID1 execution or GUI proof. Two later EFI-only reads passed memory-range/translation checks but did not recover matching prior-trial RAM contents.",
+      "result": "Current-trial header/payload CRC passed. Same native GPU 2D/coherence/provider startup and HFS mount; optional finite PID1 result records /sbin/launchd exec begin at 80.8 seconds, with no later result. Recovery observed within 238 seconds; image activation vs task handoff unresolved, no EL0/GUI/Metal shader proof.",
       "native_HFSX_mounted": true,
       "init_exec_attempted": true,
       "GPU_2D_startup_self_test": {
@@ -570,7 +570,14 @@
         "Normal_WB_identity_mapping": true,
         "record_identity_and_CRC_accepted": false,
         "reason_retrieved": false
-      }
+      },
+      "PID1_startup_results": {
+        "initial_exec_begin": true,
+        "exec_return_observed": false,
+        "helper_init_observed": false,
+        "stock_launchd_main_observed": false
+      },
+      "recovery_seen_within_seconds": 238
     },
     "rust": {
       "channel": "nightly-2026-11-03",

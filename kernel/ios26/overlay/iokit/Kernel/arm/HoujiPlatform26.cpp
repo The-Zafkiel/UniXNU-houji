@@ -47,11 +47,14 @@ static void bootResult(const char *kind, const char *object, int result, const c
     IOLog("%s\n", stage);
     houji_ufs_checkpoint(stage, 0);
 }
-extern "C" void houji26_boot_exec(const char *path, int result, int before) {
+extern "C" void houji26_boot_exec(const char *path, int result, int phase) {
     if (!path || __atomic_load_n(&bootMainSeen, __ATOMIC_ACQUIRE)) return;
     if (strcmp(path, "/sbin/launchd") && strcmp(path, "/redwood/sbin/init") &&
         strcmp(path, "/sbin/launchd.ios")) return;
-    bootResult(before ? "pid1-exec-begin" : "pid1-exec-return", path, result, "");
+    static const char *const kinds[] = {"pid1-exec-return", "pid1-exec-begin", "pid1-clone-ready",
+        "pid1-image-activated", "pid1-signature-checked", "pid1-exec-ready"};
+    if (phase < 0 || static_cast<unsigned>(phase) >= sizeof(kinds) / sizeof(kinds[0])) return;
+    bootResult(kinds[phase], path, result, "");
 }
 static void bootMainWorker(void *, wait_result_t) {
     bootResult("stock-launchd-main", "/sbin/launchd.ios", 0, "kernel initproc_spawned accepted");

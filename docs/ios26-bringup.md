@@ -245,7 +245,7 @@ panic 和系统终止，panic 显示已有错误文本，最多保留 90 秒，�
 不将该镜像用作新的完整系统启动结果。
 
 `houji_pid1_startup=1` 是独立、默认关闭的启动资格选项，仅在 native root 与有界
-Recovery 测试同时启用时生效。它最多保存八条固定路径的 PID1 exec 开始 / 返回、
+Recovery 测试同时启用时生效。它最多保存八条固定路径的 PID1 exec 开始 / 返回、任务创建、Mach-O 激活、签名与交接结果、
 `initproc_spawned` 接受及已授权用户空间重启请求；重启消息沿用内核已检查的副本。
 写入复用既有启动文件和范围检查，仅在未进入 panic、允许中断的正常上下文进行。
 stock launchd 的 main 通知在独立的一次性线程保存，避免在 sysctl 锁下做存储操作。

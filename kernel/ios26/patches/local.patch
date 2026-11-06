@@ -1410,6 +1410,62 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  
  	return err;
  }
+@@ -6163,6 +6179,15 @@
+ 		struct vnode_attr va;
+ 		struct vnode_attr origva;
+ 	} *__execve_data;
++#if HOUJI_IOS26
++	char houji_exec_path[128] = {0};
++	bool houji_exec_pid1 = proc_getpid(p) == 1;
++	if (houji_exec_pid1) {
++		size_t copied = 0;
++		if (copyinstr(uap->fname, houji_exec_path, sizeof(houji_exec_path), &copied)) houji_exec_path[0] = 0;
++	}
++	extern void houji26_boot_exec(const char *, int, int);
++#endif
+ 
+ 	/* Allocate a big chunk for locals instead of using stack since these
+ 	 * structures are pretty big.
+@@ -6222,6 +6247,9 @@
+ 
+ 		new_task = get_threadtask(imgp->ip_new_thread);
+ 	}
++#if HOUJI_IOS26
++	if (houji_exec_pid1) houji26_boot_exec(houji_exec_path, 0, 2);
++#endif
+ 
+ #if HAS_MTE_EMULATION_SHIMS
+ 	/*
+@@ -6250,6 +6278,9 @@
+ 	 * as 0 and pretends the call succeeded.
+ 	 */
+ 	error = exec_activate_image(imgp);
++#if HOUJI_IOS26
++	if (houji_exec_pid1) houji26_boot_exec(houji_exec_path, error, 3);
++#endif
+ 	/* thread and task ref returned for vfexec case */
+ 
+ 	if (imgp->ip_new_thread != NULL) {
+@@ -6310,6 +6341,9 @@
+ 		 */
+ 		ipc_task_enable(new_task);
+ 		error = process_signature(p, imgp);
++#if HOUJI_IOS26
++		if (houji_exec_pid1) houji26_boot_exec(houji_exec_path, error, 4);
++#endif
+ 	}
+ 
+ 
+@@ -6462,6 +6496,9 @@
+ 		 * switch the tasks, terminating the current task without the switch would
+ 		 * result in loosing the SIGKILL status.
+ 		 */
++#if HOUJI_IOS26
++		if (houji_exec_pid1) houji26_boot_exec(houji_exec_path, error, 5);
++#endif
+ 		if (task_did_exec(old_task)) {
+ 			/* Terminate the current task, since exec will start in new task */
+ 			task_terminate_internal(old_task);
 diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
 --- a/bsd/kern/kern_exit.c
 +++ b/bsd/kern/kern_exit.c

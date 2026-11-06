@@ -1224,3 +1224,10 @@ retained GPU handoff、HFS 根卷挂载及 `/sbin/launchd` 尝试。两次独立
 CRC，因此没有接受或发布任何错误正文。该 RAM 恢复方案在当前路径没有取得原因。
 下一轮转为可选、最多八条的正常上下文 PID1 启动结果，并将错误画面延长至最多
 90 秒、仍受原测试期限限制。桌面、stock launchd 和 Metal shader 仍未验证。
+
+完整系统 v8 使用相同单核 / 8 GiB / HFSX 根卷和图形配置，增加有限 PID1 检查点，
+并在 ADT 提供当前 `boot-epoch`。实机现有检查文件的本轮标识、header / payload CRC
+有效，约 80.8 秒记录 `pid1-exec-begin /sbin/launchd`。没有后续 exec 返回、辅助 init、
+stock launchd main 或用户空间重启结果；观察时 238 秒已在 Recovery。仅凭未记录返回
+尚不能区分 Mach-O 激活中失败与新旧任务切换问题，因此继续细分四个正常上下文节点。
+仍没有桌面或 Metal shader 证据，运行期搜集器保持关闭。

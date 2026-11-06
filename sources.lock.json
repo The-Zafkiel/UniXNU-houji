@@ -523,7 +523,8 @@
       "finite_pid1_startup_hooks_linked": true,
       "initialized_panic_record_bounds": true,
       "full_system_boot_epoch": true,
-      "coherence_precondition_fallback": true
+      "coherence_precondition_fallback": true,
+      "firmware_word_writes_and_AArch64_instructions": true
     },
     "not_yet_qualified": [
       "stock iOS26 launchd, userland runtime and desktop",
@@ -540,7 +541,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v10-PID1-clone-ready",
+      "profile": "full-system-v11-header-ready-concurrent-ADSP-7",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -550,7 +551,7 @@
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Current-trial CRC passed. Native 2D, 2-way coherence, eight WB renders, IOKit provider rounds and retained handoff passed. HFS root mounted; finite PID1 checkpoints confirm /sbin/launchd exec begin and clone ready, but no image activation result. Recovery observed within 182 seconds. No helper EL0, stock launchd, GUI or Metal shader proof; coherence fallback was not exercised because the probe passed this boot.",
+      "result": "Current-trial CRC passed. Native GPU qualification and retained provider passed. PID1 clone and vnode header read were observed; its next checkpoint competed with the ADSP startup worker. Full tails of v8/v10/v11 consistently end at ADSP stage 7, before DTB firmware load completes. This does not establish PID1 as the reset cause. Device-typed carveout bulk memcpy/bzero is being replaced by bounded aligned word writes; hardware result pending.",
       "native_HFSX_mounted": true,
       "init_exec_attempted": true,
       "GPU_2D_startup_self_test": {
@@ -578,9 +579,10 @@
         "image_activation_observed": false,
         "exec_return_observed": false,
         "helper_init_observed": false,
-        "stock_launchd_main_observed": false
+        "stock_launchd_main_observed": false,
+        "vnode_header_ready": true
       },
-      "recovery_seen_within_seconds": 182,
+      "recovery_seen_within_seconds": 199,
       "coherence_probe": {
         "status": 0,
         "phase": 6,
@@ -590,7 +592,8 @@
         "render_commands": 8,
         "proof": true,
         "result": "same-boot proof passed; fallback not taken"
-      }
+      },
+      "concurrent_ADSP_last_stage": 7
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -726,7 +729,8 @@
       "panic_reason_record": "First formatted panic or handled terminal reason in owned RAM only, with current-trial identity and CRC; initialized-empty state is distinct. Exact locator is in existing startup header. Optional next-UEFI reader defaults off; bounds/translation/identity/CRC enforced. Current Recovery path did not retain a matching record, so no error reason recovered.",
       "pid1_startup_results": "Optional houji_pid1_startup=1, default off; native-root and bounded-Recovery gates; up to eight approved PID1 exec/main and authorized reboot results in normal interruptible context only, using the existing startup file. No periodic runtime collector; successful exec is not EL0 execution proof.",
       "calendar_source": "Fresh 64-bit host boot-epoch in chosen, consumed by GenericARMPE; unused iOS16 houji_epoch argument removed; no RTC qualification",
-      "coherence_fallback": "Only optional mode 5 status 11 with phase 3, valid views, eight inconclusive dirty-line attempts and no coherence work submitted. Require original idle owner, remove both probe mappings and clean/invalidate owned scratch before continuing mode 3 with coherence off. Any cleanup or other qualification failure retains terminal stop; hardware qualification pending."
+      "coherence_fallback": "Only optional mode 5 status 11 with phase 3, valid views, eight inconclusive dirty-line attempts and no coherence work submitted. Require original idle owner, remove both probe mappings and clean/invalidate owned scratch before continuing mode 3 with coherence off. Any cleanup or other qualification failure retains terminal stop; hardware qualification pending.",
+      "ADSP_carveout_writes": "iOS26 only: bounded volatile aligned 32-bit stores, partial-word neighbor preservation, overflow checks; avoid bulk memcpy/bzero/DC ZVA on Device-typed reserved firmware RAM. Existing image placement/PAS/range rules and GPU NC whitelist unchanged. DTB metadata begin/accepted startup checkpoints distinguish PAS from segment writes; hardware qualification pending."
     },
     "minimum_device_result": {
       "kernel_entry_verified": true,

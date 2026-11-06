@@ -58,6 +58,7 @@ CHECKS = (
     'ios26-system.py',
     'ios26-startup-results.py',
     'ios26-coherence-fallback.py',
+    'ios26-firmware-writes.py',
     'ios26-return.py',
     'ios26-present.py',
     'build-inputs.py',

@@ -282,3 +282,9 @@ stock launchd 的 main 通知在独立的一次性线程保存，避免在 sysct
 copy/render 和空闲的原 owner；两组探针映射移除及 owned scratch 的 clean/invalidate
 全部成功后，保留资源并继续原模式 3，显式缓存维护保持启用。其他错误仍走原停止
 路径。此改动不宣称硬件一致性，也不改动 iOS16 的共享实现。
+
+ADSP 沿用的固件写入在 iOS26 单独适配：外部 carveout 的 WriteCombine 请求可能
+成为 Device 映射，因此段复制和尾部清零使用范围验证的 volatile 32 位访问，保留
+首尾部分字的相邻字节，拒绝地址/长度溢出。实际 AArch64 编译检查无 memcpy、
+bzero 或 DC ZVA。映射范围、MDT/PAS 资格和 GPU Normal-NC 白名单保持不变。
+DTB 元数据认证前后各有一次启动检查，运行期采集器仍关闭。

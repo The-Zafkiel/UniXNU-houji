@@ -1246,3 +1246,13 @@ WB render 和后续 IOKit provider 自检全部通过，原 owner/root/ring 保�
 image activation 结果；观察时 182 秒已回 Recovery。新保守回退这一轮没有执行，
 其硬件资格仍待验。继续将相同八条上限的有限检查细分为 vnode header ready 与
 Mach-O load begin/end，以区分文件查找、读取及 VM 装载；仍没有用户执行或桌面证据。
+
+完整系统 v11 的 CRC 有效，GPU 资格检查与 provider 通过，PID1 clone 与 vnode
+header ready 均出现。其新 checkpoint 尚未取得共享检查锁时，ADSP worker 正在
+stage 7 保存启动检查；v8/v10/v11 的完整消息尾部都止于同一 ADSP stage 7。
+因此前述 PID1 范围仅是“最后可见进度”，不能当作重启根因。观察时 199 秒在 Recovery。
+代码核对发现 iOS26 pmap 会将窗口外 ADSP carveout 的 WriteCombine 请求映射为
+Device，旧驱动仍使用 memcpy/bzero 写固件，存在未对齐或 DC ZVA 异常风险。
+改用限定映射内、对齐的 volatile 32 位写入；不扩展 pmap 白名单、不改变 PAS 与
+MDT 放置范围，也不修改 iOS16 路径。新增 DTB 元数据认证前/后的有限检查用于实机
+区分认证与段写入；此修正能否越过 ADSP 第 7 阶段仍待新轮次确认。

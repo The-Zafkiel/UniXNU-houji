@@ -1,0 +1,68 @@
+name: Build SWEET kernel
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ci/houji-build2.sh'
+      - 'ci/houji-kernel-src.tar.gz'
+      - '.github/workflows/build-kernel.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report toolchain
+        run: |
+          sw_vers -productVersion
+          xcode-select -p
+          xcodebuild -version
+          python3 -V
+
+      - name: Prepare fake KDK and source tree
+        run: |
+          set -euo pipefail
+          # KDKROOT is only consumed for T6000/T8101/VMAPPLE link flags; the SWEET
+          # build only needs the KernelSupport directory to exist.
+          export HOUJI_KDK="$RUNNER_TEMP/kdk"
+          mkdir -p "$HOUJI_KDK/System/Library/KernelSupport"
+          mkdir -p "$HOME/Desktop"
+          cp ci/houji-kernel-src.tar.gz "$HOME/Desktop/houji-kernel-src.tar.gz"
+          echo "HOUJI_KDK=$HOUJI_KDK" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          bash ci/houji-build2.sh || true
+          test -f "$HOME/houji-build.log" && tail -60 "$HOME/houji-build.log" || true
+
+      - name: Collect kernel
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/artifact"
+          K=$(find "$HOME/houji/out" -type f -size +5M \( -name 'kernel*' -o -name 'mach_kernel' -o -name '*.macho' \) 2>/dev/null | head -1)
+          if [ -z "$K" ]; then echo "no kernel produced"; ls -R "$HOME/houji/out" 2>/dev/null | head -40; exit 1; fi
+          echo "kernel=$K size=$(stat -f%z "$K")"
+          gzip -9 -c "$K" > "$RUNNER_TEMP/artifact/kernel.new.gz"
+          cp "$HOME/houji-build.log" "$RUNNER_TEMP/artifact/houji-build.log"
+          ls -l "$RUNNER_TEMP/artifact"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel
+          path: ${{ runner.temp }}/artifact/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: |
+            ${{ runner.home }}/houji-build.log
+          if-no-files-found: warn

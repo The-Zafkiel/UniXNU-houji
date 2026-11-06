@@ -540,7 +540,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v9-coherence-precondition-inconclusive",
+      "profile": "full-system-v10-PID1-clone-ready",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -550,9 +550,9 @@
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Current-trial CRC passed. Native 2D, VM/API and four concurrent GPU/UFS jobs passed. Optional coherence probe returned status 11 after eight attempts and zero dirty lines; allowed cached/uncached views resolved correctly. No coherence commands or PID1 progress observed. Original diagnostic path stopped the GPU; restricted iOS26 fallback awaits hardware qualification.",
-      "native_HFSX_mounted": false,
-      "init_exec_attempted": false,
+      "result": "Current-trial CRC passed. Native 2D, 2-way coherence, eight WB renders, IOKit provider rounds and retained handoff passed. HFS root mounted; finite PID1 checkpoints confirm /sbin/launchd exec begin and clone ready, but no image activation result. Recovery observed within 182 seconds. No helper EL0, stock launchd, GUI or Metal shader proof; coherence fallback was not exercised because the probe passed this boot.",
+      "native_HFSX_mounted": true,
+      "init_exec_attempted": true,
       "GPU_2D_startup_self_test": {
         "PAS_authenticated": true,
         "submit_kinds_passed": [
@@ -563,7 +563,7 @@
         "pixels_verified": 1024,
         "markers_verified": 8,
         "image_crc32": "e843b26a",
-        "retained_owner_root_ring": false,
+        "retained_owner_root_ring": true,
         "Metal_shaders_verified": false
       },
       "prior_panic_RAM_read": {
@@ -573,21 +573,23 @@
         "reason_retrieved": false
       },
       "PID1_startup_results": {
-        "initial_exec_begin": false,
+        "initial_exec_begin": true,
+        "clone_ready": true,
+        "image_activation_observed": false,
         "exec_return_observed": false,
         "helper_init_observed": false,
         "stock_launchd_main_observed": false
       },
-      "recovery_seen_within_seconds": 189,
+      "recovery_seen_within_seconds": 182,
       "coherence_probe": {
-        "status": 11,
-        "phase": 3,
-        "attempts": 8,
-        "dirty_lines": 0,
-        "copy_commands": 0,
-        "render_commands": 0,
-        "proof": false,
-        "result": "inconclusive precondition"
+        "status": 0,
+        "phase": 6,
+        "attempts": 1,
+        "dirty_lines": 64,
+        "copy_commands": 2,
+        "render_commands": 8,
+        "proof": true,
+        "result": "same-boot proof passed; fallback not taken"
       }
     },
     "rust": {

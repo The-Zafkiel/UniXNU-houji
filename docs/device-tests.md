@@ -1239,3 +1239,10 @@ GPU/UFS 并行工作通过后，一致性探针在 phase 3 返回 status 11，�
 观察时 189 秒已在 Recovery。新增 iOS26 专用的保守回退，只针对这种未提交 GPU
 探针工作的不确定前提：验证 owner/idle、移除两组探针映射、维护 owned scratch
 后继续模式 3，coherence capability 保持关闭。任何清理失败仍停止；实机分支待验。
+
+完整系统 v10 的 CRC 有效，一致性前提这一轮为 64/64 脏缓存行，两次 copy、八次
+WB render 和后续 IOKit provider 自检全部通过，原 owner/root/ring 保留。HFS 挂载后
+约 81.6 秒记录 `/sbin/launchd` exec 开始，81.7 秒记录 clone ready，随后没有
+image activation 结果；观察时 182 秒已回 Recovery。新保守回退这一轮没有执行，
+其硬件资格仍待验。继续将相同八条上限的有限检查细分为 vnode header ready 与
+Mach-O load begin/end，以区分文件查找、读取及 VM 装载；仍没有用户执行或桌面证据。

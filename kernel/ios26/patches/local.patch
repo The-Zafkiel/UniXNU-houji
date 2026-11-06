@@ -1386,7 +1386,36 @@ diff --git a/osfmk/kern/debug.c b/osfmk/kern/debug.c
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -6112,7 +6112,23 @@
+@@ -2079,7 +2079,15 @@
+ 	/*
+ 	 * Actually load the image file we previously decided to load.
+ 	 */
++#if HOUJI_IOS26
++	bool houji_macho_pid1 = proc_getpid(current_proc()) == 1;
++	extern void houji26_boot_exec(const char *, int, int);
++	if (houji_macho_pid1) houji26_boot_exec(imgp->ip_strings + strlen(EXECUTABLE_KEY), 0, 7);
++#endif
+ 	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
++#if HOUJI_IOS26
++	if (houji_macho_pid1) houji26_boot_exec(imgp->ip_strings + strlen(EXECUTABLE_KEY), lret, 8);
++#endif
+ 	if (lret != LOAD_SUCCESS && exec_trace) {
+ 		printf("exectrace: %s: load_machfile failed: %d\n", imgp->ip_ndp->ni_cnd.cn_pnbuf, lret);
+ 	}
+@@ -3075,6 +3083,12 @@
+ 		memset(imgp->ip_vdata + (PAGE_SIZE - resid), 0x0, resid);
+ 	}
+ 
++#if HOUJI_IOS26
++	if (proc_getpid(current_proc()) == 1) {
++		extern void houji26_boot_exec(const char *, int, int);
++		houji26_boot_exec(excpath, 0, 6);
++	}
++#endif
+ encapsulated_binary:
+ 	/* Limit the number of iterations we will attempt on each binary */
+ 	if (++itercount > EAI_ITERLIMIT) {
+@@ -6112,7 +6126,23 @@
  	muap.argp = uap->argp;
  	muap.envp = uap->envp;
  	muap.mac_p = USER_ADDR_NULL;
@@ -1410,7 +1439,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  
  	return err;
  }
-@@ -6163,6 +6179,15 @@
+@@ -6163,6 +6193,15 @@
  		struct vnode_attr va;
  		struct vnode_attr origva;
  	} *__execve_data;
@@ -1426,7 +1455,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  
  	/* Allocate a big chunk for locals instead of using stack since these
  	 * structures are pretty big.
-@@ -6222,6 +6247,9 @@
+@@ -6222,6 +6261,9 @@
  
  		new_task = get_threadtask(imgp->ip_new_thread);
  	}
@@ -1436,7 +1465,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  
  #if HAS_MTE_EMULATION_SHIMS
  	/*
-@@ -6250,6 +6278,9 @@
+@@ -6250,6 +6292,9 @@
  	 * as 0 and pretends the call succeeded.
  	 */
  	error = exec_activate_image(imgp);
@@ -1446,7 +1475,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  	/* thread and task ref returned for vfexec case */
  
  	if (imgp->ip_new_thread != NULL) {
-@@ -6310,6 +6341,9 @@
+@@ -6310,6 +6355,9 @@
  		 */
  		ipc_task_enable(new_task);
  		error = process_signature(p, imgp);
@@ -1456,7 +1485,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  	}
  
  
-@@ -6462,6 +6496,9 @@
+@@ -6462,6 +6510,9 @@
  		 * switch the tasks, terminating the current task without the switch would
  		 * result in loosing the SIGKILL status.
  		 */

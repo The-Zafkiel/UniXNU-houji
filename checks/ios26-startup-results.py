@@ -67,7 +67,7 @@ int main() {
     reset();
     houji26_boot_exec("/Applications/arbitrary",0,1);
     houji26_boot_exec("/sbin/launchd",0,-1);
-    houji26_boot_exec("/sbin/launchd",0,6);
+    houji26_boot_exec("/sbin/launchd",0,9);
     assert(writes.empty());
     for(const char *path:{"/sbin/launchd","/redwood/sbin/init","/sbin/launchd.ios"}) {
         houji26_boot_exec(path,0,1);houji26_boot_exec(path,0,0);
@@ -88,12 +88,15 @@ int main() {
     assert(writes.empty());
     reset();thread_error=1;houji26_boot_main();assert(!queued && writes.empty());
     reset();
-    for(int phase=2;phase<=5;++phase) houji26_boot_exec("/sbin/launchd",phase,phase);
-    assert(writes.size()==4);
+    for(int phase=2;phase<=8;++phase) houji26_boot_exec("/sbin/launchd",phase,phase);
+    assert(writes.size()==7);
     assert(writes[0].find("pid1-clone-ready")!=std::string::npos);
     assert(writes[1].find("pid1-image-activated")!=std::string::npos);
     assert(writes[2].find("pid1-signature-checked")!=std::string::npos);
     assert(writes[3].find("pid1-exec-ready")!=std::string::npos);
+    assert(writes[4].find("pid1-vnode-header-ready")!=std::string::npos);
+    assert(writes[5].find("pid1-macho-load-begin")!=std::string::npos);
+    assert(writes[6].find("pid1-macho-load-end")!=std::string::npos);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='houji26-startup-results-') as name:

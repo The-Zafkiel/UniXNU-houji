@@ -52,7 +52,8 @@ extern "C" void houji26_boot_exec(const char *path, int result, int phase) {
     if (strcmp(path, "/sbin/launchd") && strcmp(path, "/redwood/sbin/init") &&
         strcmp(path, "/sbin/launchd.ios")) return;
     static const char *const kinds[] = {"pid1-exec-return", "pid1-exec-begin", "pid1-clone-ready",
-        "pid1-image-activated", "pid1-signature-checked", "pid1-exec-ready"};
+        "pid1-image-activated", "pid1-signature-checked", "pid1-exec-ready",
+        "pid1-vnode-header-ready", "pid1-macho-load-begin", "pid1-macho-load-end"};
     if (phase < 0 || static_cast<unsigned>(phase) >= sizeof(kinds) / sizeof(kinds[0])) return;
     bootResult(kinds[phase], path, result, "");
 }

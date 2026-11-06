@@ -124,6 +124,21 @@ with tempfile.TemporaryDirectory(prefix='houji26-system-') as temporary:
                     '-I', str(ROOT / 'kernel/ios26/overlay/osfmk/arm64'),
                     str(assembly), str(ROOT / 'checks/ios26-screen.c'), '-o', str(screen)], check=True)
     subprocess.run([str(screen)], check=True)
+    reserved = temporary / 'reserved-nc'
+    subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                    '-I', str(ROOT / 'kernel/ios26/overlay/osfmk/arm64'),
+                    str(ROOT / 'checks/ios26-reserved-nc.c'), '-o', str(reserved)], check=True)
+    subprocess.run([str(reserved)], check=True)
+    gfx = Path('iokit/Kernel/houji-ufs-root/HoujiGpuNativeGfx.inc')
+    target = temporary / gfx;target.parent.mkdir(parents=True)
+    target.write_bytes((ROOT / 'kernel/overlay' / gfx).read_bytes())
+    subprocess.run(['git', 'apply', '--include=' + str(gfx),
+                    str(ROOT / 'kernel/ios26/patches/reused-drivers.patch')], cwd=temporary, check=True)
+    content = target.read_text()
+    assert content.index('hzr_valid(&g.handoff') < content.index('houji26_register_reserved_nc') < content.index('IODeviceMemory::withRange')
+    assert '!hzr_par(r,g.pa[which]+i*4096)' in content
 print('PASS: production full-system ADT preserves houji hardware, validates CPU/GPU slots and fresh entropy; applied UEFI uses Darwin 25 bounds and mandatory startup gates; no hardware emulation')
 print('PASS: production early-failure recovery requires exact live BCB readback, preserves status, waits ten seconds, retains handlers and performs no writes; host callbacks only')
 print('PASS: exact no-payload LUN0 flush survives a closed data-write gate; WRITE10 still requires arming and its bounded range; actual AArch64 screen marker checks pixel bounds/invalid geometry; no firmware or MMU emulation')
+print('PASS: production reserved-NC policy publishes only two validated 16K pages, excludes padding/PIL neighbours/kernel RAM, rejects repeat registration and wrap, and retains HZR/AT checks; no GPU qualification')

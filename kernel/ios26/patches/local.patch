@@ -1315,3 +1315,46 @@ index 70fd089..3974139 100644
  
  	b		common_start
  
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -134,6 +134,21 @@
+  * non-cacheable (see wimg_to_pte); set by a driver before it maps its DMA memory there */
+ extern pmap_paddr_t hakios_normal_nc_lo, hakios_normal_nc_hi;
+ pmap_paddr_t hakios_normal_nc_lo, hakios_normal_nc_hi;
++
++#if defined(HOUJI_IOS26)
++#include <arm64/HoujiReservedNc.h>
++extern unsigned long gPhysBase, gPhysSize;
++static HjncPolicy houji_reserved_nc;
++int houji26_register_reserved_nc(uint64_t metadata,uint64_t raw,uint64_t bytes) {
++    return hjnc_register(&houji_reserved_nc,metadata,raw,bytes,gPhysBase,gPhysSize);
++}
++int houji26_reserved_nc_covers(uint64_t address,uint64_t bytes) {
++    return hjnc_covers(&houji_reserved_nc,address,bytes);
++}
++#define HOUJI_RESERVED_NC(pa) houji26_reserved_nc_covers((pa),ARM_PGBYTES)
++#else
++#define HOUJI_RESERVED_NC(pa) 0
++#endif
+ 
+ static bool alloc_asid(pmap_t pmap);
+ static void free_asid(pmap_t pmap);
+@@ -6039,7 +6054,7 @@
+ 		 * the loader's lowdma=) is RAM all the same, and must be Normal non-cacheable rather than
+ 		 * Device: the driver bzero()s and memcpy()s it, and DC ZVA or an unaligned access to Device
+ 		 * memory is an alignment fault (panic "Unaligned kernel data abort" in bzero). */
+-		if (is_dram_addr(pa) || (pa >= hakios_normal_nc_lo && pa < hakios_normal_nc_hi)) {
++		if (is_dram_addr(pa) || (pa >= hakios_normal_nc_lo && pa < hakios_normal_nc_hi) || HOUJI_RESERVED_NC(pa)) {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_WRITECOMB);
+ 		} else {
+ #if HAS_FEAT_XS
+--- a/osfmk/arm64/Makefile
++++ b/osfmk/arm64/Makefile
+@@ -46,6 +46,7 @@
+ 
+ # Headers used to compile xnu
+ EXPORT_MD_LIST = \
++	HoujiReservedNc.h \
+ 	cpc_arm64.h \
+ 	hv_hvc.h \
+ 	lowglobals.h \

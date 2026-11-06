@@ -29,3 +29,31 @@
    gRootArmed=true;attached=true;
    IOLog("HOUJI ROOT: md0 is native UFS LUN0 [%u,%u), bytes=%llu; no RAM root backing\n",
          kHoujiRootFirst,kHoujiRootFirst+kHoujiRootBlocks,kHoujiRootBytes);
+--- a/iokit/Kernel/houji-ufs-root/HoujiGpuNativeGfx.inc
++++ b/iokit/Kernel/houji-ufs-root/HoujiGpuNativeGfx.inc
+@@ -7,6 +7,8 @@
+ #define HOUJI_GPU_NATIVE_GFX_INC
+ #include "HoujiZapHandoff.h"
+ #include "HoujiZapTrial.h"
++#include <arm64/HoujiReservedNc.h>
++static_assert(HZR_TARGET_PAGE==HJNC_TARGET,"same fixed reserved target");
+ #include "GpuPasProbe.h"
+ #include "GpuZapLoad.h"
+ #include "GpuFirstContext.h"
+@@ -56,6 +58,7 @@
+  g.import_stage=2;if(!hzr_valid(&g.handoff,sizeof(g.handoff),kHoujiZapTrial))return 1;
+  g.pa[0]=hzr_get64(&g.handoff,HZR_METADATA_PA_O);g.pa[1]=HZR_TARGET_PAGE;g.raw=hzr_get64(&g.handoff,HZR_RAW_BASE_O);g.raw_bytes=hzr_get64(&g.handoff,HZR_RAW_BYTES_O);
+  if(!houjiGfxOutside(g.raw,g.raw_bytes) || !houjiGfxOutside(g.pa[1],16384))return 1;
++ if(!houji26_register_reserved_nc(g.pa[0],g.raw,g.raw_bytes))return 1;
+  for(unsigned which=0;which<2;which++){g.import_stage=3;g.import_which=which;
+ #ifdef HOUJI_FULL_HOST_NATIVE_HOST_TEST
+   g.va[which]=(uintptr_t)houjiGfxHostMap(g.pa[which],which);
+@@ -65,7 +68,7 @@
+   if(!g.maps[which] || g.maps[which]->getLength()!=16384)return 1;g.va[which]=g.maps[which]->getVirtualAddress();
+ #endif
+   if(!g.va[which] || (g.va[which]&16383))return 1;
+-  for(unsigned i=0;i<4;i++){g.import_stage=4;g.import_page=i;uint64_t r=0,w=0;if(!houjiFullHostAt(g.va[which]+i*4096,false,&r) || !houjiFullHostAt(g.va[which]+i*4096,true,&w) || r!=w || !hzr_par(r,g.pa[which]+i*4096))return 1;g.par[which][i]=r;}
++  for(unsigned i=0;i<4;i++){g.import_stage=4;g.import_page=i;uint64_t r=0,w=0;int readOk=houjiFullHostAt(g.va[which]+i*4096,false,&r);int writeOk=readOk && houjiFullHostAt(g.va[which]+i*4096,true,&w);if(!readOk || !writeOk || r!=w || !hzr_par(r,g.pa[which]+i*4096)){IOLog("HOUJI26 ZAP MAP REFUSED: which=%u page=%u PA=%llx read=%u write=%u PAR=%llx/%llx; no data access or GPU execution\n",which,i,g.pa[which]+i*4096,readOk,writeOk,r,w);return 1;}g.par[which][i]=r;}
+  }
+  g.import_stage=5;g.imported=1;if(!houjiGfxForeign() || !houjiGfxTranslations(1))return 1;
+  const volatile uint8_t*meta=(const volatile uint8_t*)(uintptr_t)g.va[0];for(unsigned i=0;i<16384;i++)if(meta[i])return 1;

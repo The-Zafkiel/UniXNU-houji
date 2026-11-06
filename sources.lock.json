@@ -516,7 +516,8 @@
       "arm64e_turnip_build": true,
       "arm64e_metal_bundle_build": true,
       "full_root_image_assembly": true,
-      "full_root_hfs_check": true
+      "full_root_hfs_check": true,
+      "reserved_nc_range_policy": true
     },
     "not_yet_qualified": [
       "full iOS26 root boot, userland runtime and desktop",
@@ -533,17 +534,17 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v2",
-      "UEFI_UFS_GPT_FAT_verified": true,
-      "owned_8GiB_memory_test_verified": true,
-      "PAC_setup_verified": true,
-      "touch_firmware_handoff_verified": true,
-      "loader_handoff_assembly_verified": true,
-      "kernel_entry_verified": false,
+      "profile": "full-system-v4-cpu1-control",
+      "kernel_entry_verified": true,
+      "native_UFS_initialized": true,
+      "native_HFSX_identity_verified": true,
+      "logical_cpus_verified": 1,
+      "CPU0_timer_verified": true,
+      "startup_checkpoint_CRC_verified": true,
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Owner photo shows full memory test, PAC fixups and green handoff bar; no XNU text. Before EBS, FAT cache flush was denied with -EROFS (SCSI 0x35) after data-write gate closed. Owner returned to OrangeFox."
+      "result": "Eight-CPU screen-marker trial reached actual kernel entry/bootstrap tables. Same-8GiB one-CPU control committed current-trial startup evidence then reset; GPU import refused metadata mapping at stage4/which0/page0. No desktop or render proof; eight-CPU progress remains unqualified."
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -673,7 +674,8 @@
         "magenta": "actual kernel cold entry",
         "white": "bootstrap page tables prepared before MMU enable"
       },
-      "flush_policy": "Only exact payload-free LUN0 SYNCHRONIZE CACHE is independent of write arming; WRITE10 retains the original arm and fixed logfs range"
+      "flush_policy": "Only exact payload-free LUN0 SYNCHRONIZE CACHE is independent of write arming; WRITE10 retains the original arm and fixed logfs range",
+      "reserved_nc_policy": "Current-trial HZR EFI/GCD/AT validation precedes one-time whitelist of exactly the metadata and fixed target 16K pages; WCOMB only, no padding/PIL-wide/kernel-RAM allowance; actual AT/PA checks retained"
     },
     "minimum_device_result": {
       "kernel_entry_verified": true,

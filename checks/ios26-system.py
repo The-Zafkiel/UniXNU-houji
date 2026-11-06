@@ -11,6 +11,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+assert (ROOT / 'kernel/ios26/overlay/osfmk/arm64/HoujiPanic26.h').read_bytes() == (ROOT / 'uefi/ios26/overlay/Platforms/Xiaomi/houjiPkg/Application/HoujiStorageProbe/HoujiPanic26.h').read_bytes()
 sys.path.insert(0, str(ROOT / 'tools'))
 from ios26_adt import Node, parse, serialize
 
@@ -159,3 +160,4 @@ print('PASS: production early-failure recovery requires exact live BCB readback,
 print('PASS: exact no-payload LUN0 flush survives a closed data-write gate; WRITE10 still requires arming and its bounded range; no firmware emulation')
 print('PASS: production reserved-NC policy publishes only two validated 16K pages, excludes padding/PIL neighbours/kernel RAM, rejects repeat registration and wrap, and retains HZR/AT checks; no GPU qualification')
 print('PASS: terminal renderer respects mapping capacity, visible pixels, stride padding, text bounds and invalid geometry; no panic-path I/O or display qualification')
+print('PASS: bounded first-panic RAM record rejects a different trial, corruption and invalid owned/system RAM ranges; kernel/firmware ABI matches; cross-reset retention unqualified')

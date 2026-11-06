@@ -1358,3 +1358,28 @@ index 70fd089..3974139 100644
  	cpc_arm64.h \
  	hv_hvc.h \
  	lowglobals.h \
+diff --git a/osfmk/kern/debug.c b/osfmk/kern/debug.c
+--- a/osfmk/kern/debug.c
++++ b/osfmk/kern/debug.c
+@@ -1261,6 +1261,10 @@
+ 	if (PE_kputc == NULL) {
+ 		char buf[EARLY_PANIC_BUFLEN];
+ 		vsnprintf(buf, EARLY_PANIC_BUFLEN, panic_format_str, *panic_args);
++#if HOUJI_IOS26
++		extern void houji26_capture_reason(const char *);
++		houji26_capture_reason(buf);
++#endif
+ 		paniclog_append_noflush("panic: %s\n", buf);
+ 		/* redwood: PE_kputc is not hooked yet, so send the reason to the always-available loader log. */
+ 		{
+@@ -1280,6 +1284,10 @@
+ 		va_list ap;
+ 		va_copy(ap, *panic_args);
+ 		vsnprintf(rbuf, sizeof(rbuf), panic_format_str, ap);
++#if HOUJI_IOS26
++		extern void houji26_capture_reason(const char *);
++		houji26_capture_reason(rbuf);
++#endif
+ 		va_end(ap);
+ 		loader_log_line("\n== PANIC: ");
+ 		loader_log_line(rbuf);

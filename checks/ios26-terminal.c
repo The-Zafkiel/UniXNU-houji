@@ -7,6 +7,26 @@ static uint32_t pixels[32 + 96 * 160 + 32];
 static unsigned char font[256 * 16];
 
 int main(void) {
+    Hjt26Reason reason = {0}, truncated = {0};
+    const uint8_t run_id[16] = {1,2,3}, other[16] = {4,5,6};
+    hjt26_capture(&reason, NULL, run_id); hjt26_capture(&reason, "", run_id);
+    assert(reason.state == 0);
+    hjt26_capture(&reason, "original panic: errno 8", run_id);
+    hjt26_capture(&reason, "nested panic must not replace the first cause", other);
+    assert(reason.state == 2 && !strcmp(reason.record.text, "original panic: errno 8"));
+    assert(hp26_valid(&reason.record, run_id) && !hp26_valid(&reason.record, other));
+    reason.record.text[0] ^= 1; assert(!hp26_valid(&reason.record, run_id));
+    reason.record.text[0] ^= 1; assert(hp26_valid(&reason.record, run_id));
+    char large[1024]; memset(large, 'x', sizeof large);
+    hjt26_capture(&truncated, large, run_id);
+    assert(truncated.state == 2 && strlen(truncated.record.text) == 511);
+    assert(hp26_valid(&truncated.record, run_id));
+    assert(hp26_range(0x80004004, 0x80000000, 8ULL << 30, 0x80000000, 0x10000000));
+    assert(!hp26_range(0x80004004, 0x80000000, 2ULL << 30, 0x80000000, 0x10000000));
+    assert(!hp26_range(0x80004004, 0x80008000, 8ULL << 30, 0x80000000, 0x10000000));
+    assert(!hp26_range(0x80004004, 0x80000000, 8ULL << 30, 0x80004008, 0x10000000));
+    assert(!hp26_range(0x80004004, 0x80000000, 8ULL << 30, 0x80004000, 32));
+    assert(!hp26_range(UINT64_MAX - 1, 0x80000000, 8ULL << 30, 0, UINT64_MAX));
     Hjt26Surface s = {0}, before;
     uintptr_t base = (uintptr_t)(pixels + 32);
     size_t capacity = 96 * 160 * 4;

@@ -518,7 +518,8 @@
       "full_root_image_assembly": true,
       "full_root_hfs_check": true,
       "reserved_nc_range_policy": true,
-      "terminal_screen_bounds": true
+      "terminal_screen_bounds": true,
+      "panic_record_parser_and_bounds": true
     },
     "not_yet_qualified": [
       "stock iOS26 launchd, userland runtime and desktop",
@@ -535,7 +536,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v5-reserved-nc-cpu1",
+      "profile": "full-system-v6-terminal-screen-cpu1",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -545,7 +546,7 @@
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Current-trial CRC-verified startup evidence confirms PAS authentication, three dedicated 2D submissions and fixed-image readback, retained GPU ownership and HFS root mount. Kernel attempted /sbin/launchd; user reported automatic Recovery. Final stop reason, stock launchd runtime, desktop, shaders and eight-CPU progress remain unqualified.",
+      "result": "Fresh current-trial startup evidence again confirms native GPU 2D/coherence/provider qualification, retained ownership, HFS mount and /sbin/launchd attempt. Target was back in OrangeFox within 159 seconds; final on-screen reason is unavailable. No proof of PID1 execution, GUI, Metal shaders or eight-CPU progress.",
       "native_HFSX_mounted": true,
       "init_exec_attempted": true,
       "GPU_2D_startup_self_test": {
@@ -560,7 +561,8 @@
         "image_crc32": "e843b26a",
         "retained_owner_root_ring": true,
         "Metal_shaders_verified": false
-      }
+      },
+      "recovery_seen_within_seconds": 159
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -692,7 +694,8 @@
       },
       "flush_policy": "Only exact payload-free LUN0 SYNCHRONIZE CACHE is independent of write arming; WRITE10 retains the original arm and fixed logfs range",
       "reserved_nc_policy": "Current-trial HZR EFI/GCD/AT validation precedes one-time whitelist of exactly the metadata and fixed target 16K pages; WCOMB only, no padding/PIL-wide/kernel-RAM allowance; actual AT/PA checks retained",
-      "terminal_screen": "Existing mapped console and kernel font only; panic text or halt/deadline reason held for 20 seconds; no allocation, new mapping, UFS I/O or UEFI return; normal deadline includes display interval; hardware visibility pending"
+      "terminal_screen": "Existing mapped console and kernel font only; panic text or halt/deadline reason held for 20 seconds; no allocation, new mapping, UFS I/O or UEFI return; normal deadline includes display interval; hardware visibility pending",
+      "panic_reason_record": "First existing formatted panic reason in current-trial owned RAM only, trial-tagged CRC record. Existing startup-header reserved bytes carry the exact locator; no new file/write and no panic I/O. Optional next-firmware reader defaults off and requires owned/SystemMemory/free-page/AT/trial/CRC validation. Cross-reset retention unqualified."
     },
     "minimum_device_result": {
       "kernel_entry_verified": true,

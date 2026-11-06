@@ -57,3 +57,36 @@
   }
   g.import_stage=5;g.imported=1;if(!houjiGfxForeign() || !houjiGfxTranslations(1))return 1;
   const volatile uint8_t*meta=(const volatile uint8_t*)(uintptr_t)g.va[0];for(unsigned i=0;i<16384;i++)if(meta[i])return 1;
+diff --git a/iokit/Kernel/houji-ufs-root/HoujiUfsRead.cpp b/iokit/Kernel/houji-ufs-root/HoujiUfsRead.cpp
+--- a/iokit/Kernel/houji-ufs-root/HoujiUfsRead.cpp
++++ b/iokit/Kernel/houji-ufs-root/HoujiUfsRead.cpp
+@@ -369,6 +369,10 @@
+ extern "C" unsigned houji_network_stack_snapshot(char *,unsigned);
+ extern "C" unsigned houji_cpu_dvfs_snapshot(char *,unsigned);
+ extern "C" unsigned houji_adsp_snapshot(char *,unsigned);
++#if HOUJI_IOS26
++#include <machine/machine_routines.h>
++extern "C" const void *houji26_panic_record(void);
++#endif
+ static const char *saveNativeLog(void) {
+   static uint8_t metadata[7*4096],image[65536];
+   constexpr unsigned gpuCapacity=20480,displayCapacity=4096,sampleCapacity=12800;
+@@ -403,6 +407,18 @@
+   memcpy(image+4096+used,marker,sizeof(marker)-1);used+=sizeof(marker)-1;
+   used+=copyKernelMessages(reinterpret_cast<char *>(image+4096+used),sizeof(image)-4096-used);
+   houjiLogHeader(image,image+4096,used);
++#if HOUJI_IOS26
++  // Typed crash-record locator in previously unused header bytes. Written
++  // only at existing healthy startup checkpoints, never from panic.
++  const uint64_t panicPa=ml_static_vtop((vm_offset_t)houji26_panic_record());
++  constexpr uint32_t panicBytes=544;
++  if(gPhysSize>=panicBytes && panicPa>=gPhysBase && panicPa-gPhysBase<=gPhysSize-panicBytes) {
++    memcpy(image+64,"HJPTR026",8);memcpy(image+72,&panicPa,8);memcpy(image+80,&panicBytes,4);
++    const uint64_t ownedBase=gPhysBase,ownedBytes=gPhysSize;
++    memcpy(image+88,&ownedBase,8);memcpy(image+96,&ownedBytes,8);
++    bzero(image+40,4);const uint32_t headerCrc=houjiCrc32(image,4096);memcpy(image+40,&headerCrc,4);
++  }
++#endif
+   // The armed window contains only the 16 preallocated file data sectors.
+   // Commit header last, with a cache flush at each boundary. No FAT writes.
+   gLogArmed=true;

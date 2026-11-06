@@ -5,11 +5,31 @@
 #define HOUJI_TERMINAL26_H
 #include <stdint.h>
 #include <stddef.h>
+#include "HoujiPanic26.h"
 
 typedef struct {
     volatile uint32_t *base;
     uint32_t width, height, row_words;
 } Hjt26Surface;
+
+typedef struct { unsigned state; Hp26Record record; } Hjt26Reason;
+
+static inline void hjt26_capture(Hjt26Reason *reason, const char *text, const uint8_t run_id[16]) {
+    if (!reason || !text || !text[0] || !run_id) return;
+    unsigned empty = 0;
+    if (!__atomic_compare_exchange_n(&reason->state, &empty, 1U, 0,
+        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+    Hp26Record *record = &reason->record;
+    static const uint8_t magic[8] = {'H','J','P','A','N','0','2','6'};
+    for (unsigned i = 0; i < 8; ++i) record->magic[i] = magic[i];
+    for (unsigned i = 0; i < 16; ++i) record->run_id[i] = run_id[i];
+    size_t i = 0;
+    while (i + 1 < sizeof(record->text) && text[i]) { record->text[i] = text[i]; ++i; }
+    record->length = (uint32_t)i;
+    while (i < sizeof(record->text)) record->text[i++] = 0;
+    record->crc32 = hp26_crc(record);
+    __atomic_store_n(&reason->state, 2U, __ATOMIC_RELEASE);
+}
 
 static inline int hjt26_surface(Hjt26Surface *out, uintptr_t base, uint32_t width,
     uint32_t height, uint32_t row_bytes, uint32_t depth, size_t capacity) {

@@ -306,4 +306,15 @@ canonical preboot 视图。镜像作者现在检查这两个视图和 arm64e cac
 `houji_pid1_detail=1` 才开启已用于定位初始程序头的深层装载节点。默认有限记录
 仅覆盖三个 exec 的开始/返回与 stock main，给后续链条留出七条普通额度；退出
 原因始终有一条独立保留名额。新本地 v4 镜像已经验证两处 canonical Cryptex
-视图、原始链接/数字所有者、86 个未改动的共享缓存文件及文件系统，尚待安装启动。
+视图、原始链接/数字所有者、86 个未改动的共享缓存文件及文件系统。v15 已安装并
+回读验证，但 stock launchd 仍报 `no such file, no dyld cache`；新保留的退出记录
+与用户照片一致，已经取得完整原因，尚未到 launchd main。
+
+扁平 HFS 还需提供 dyld 的普通目录入口：
+`/System/Library/Caches/com.apple.dyld` 相对链接到现有 OS Cryptex 的缓存目录。
+这让未能经 ignition 发现缓存的加载器仍可尝试系统默认路径；不改写缓存字节，
+不绕过共享区域或签名验证。镜像作者拒绝覆盖该位置的既有目录/其他链接，并验证
+最终目标仍在 canonical Cryptex 内。该入口能否推进实际 dyld 加载仍待实机结果。
+查找行为参考 [Apple CacheFinder](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/dyld/DyldProcessConfig.cpp)；
+供体实际 dyld-1387 同时含上述默认路径及 ignition 诊断字符串，不能将参考源码
+本身当作供体运行轨迹。

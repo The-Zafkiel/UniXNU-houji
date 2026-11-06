@@ -1290,3 +1290,16 @@ Cryptex 布局修正候选 v4 在独立本地副本完成，86 个共享缓存�
 canonical 路径、原始链接和数字所有权通过检查；磁盘映像设备上的文件系统检查
 通过。SHA-256 为 e47367ae0ad2acf76a19973048a2d82cc25eabcd1945202f265b5dc369d08e51。
 此处仍是离线候选，不能据此宣称 dyld 或桌面已通过。
+
+完整系统 v15 已安装上述 v4 根卷；四个变化分块写入后，全部 256 个分块回读与
+新镜像一致，启动分区、GPT、misc 和根卷上边界保持原值。实机仍在 stock launchd
+的 dyld 阶段退出，说明 canonical Cryptex 布局修正本身没有解决问题。本轮固定
+文件的身份及 header/payload CRC 有效，三个 exec 均记录返回 0；预留的正常退出
+记录完整保存 namespace 6 / code 1、`Library not loaded: /usr/lib/libSystem.B.dylib`
+及 `no such file, no dyld cache`。它与 IMG_0929 的可见错误逐项一致，并补全了
+画面截断的 reason，因此这类 PID1/dyld 退出可先依赖自动回读，不必每轮拍照。
+这不扩展到任意早期异常或内核 panic；运行期搜集器仍关闭，launchd main/桌面未到达。
+
+供体 dyld 的默认目录为 `/System/Library/Caches/com.apple.dyld/`，该路径在当前
+扁平 HFS 镜像中不存在。后续组装为此目录提供指向既有 Cryptex 缓存的相对链接，
+仍保留 canonical 路径与原始 86 个缓存文件；该兼容入口尚待独立实机验证。

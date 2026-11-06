@@ -13,6 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SIZE = 32 * 1024 ** 3
+SHARED_CACHE_ALIAS = '../../Cryptexes/OS/System/Library/Caches/com.apple.dyld'
 
 
 def digest(path):
@@ -73,6 +74,17 @@ def replace_directory(root, relative):
     return target
 
 
+def install_shared_cache_view(root):
+    # This flattened HFS root has no APFS graft/ignition discovery. Expose the
+    # unchanged Cryptex cache at dyld's ordinary iPhone fallback directory too.
+    alias = directory_in_root(root, 'System/Library/Caches') / 'com.apple.dyld'
+    if alias.is_symlink() and os.readlink(alias) == SHARED_CACHE_ALIAS:
+        return
+    if alias.is_symlink() or alias.exists():
+        raise ValueError('Refusing to replace an occupied system shared-cache path')
+    alias.symlink_to(SHARED_CACHE_ALIAS, target_is_directory=True)
+
+
 def verify_cryptex_views(root):
     root = root.resolve()
     for name in ('OS', 'App'):
@@ -85,6 +97,10 @@ def verify_cryptex_views(root):
                 os.readlink(alias) != expected or alias.resolve() != canonical):
             raise ValueError('Cryptex canonical path or stock alias is invalid: ' + name)
     cache = root / 'private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld'
+    fallback = root / 'System/Library/Caches/com.apple.dyld'
+    if (not fallback.is_symlink() or os.readlink(fallback) != SHARED_CACHE_ALIAS or
+            fallback.resolve() != cache or cache.resolve() != cache):
+        raise ValueError('System shared-cache fallback must resolve to the canonical Cryptex cache')
     ordinary_file(cache / 'dyld_shared_cache_arm64e')
     with (cache / 'dyld_shared_cache_arm64e').open('rb') as stream:
         magic = stream.read(16)
@@ -189,6 +205,7 @@ def main():
                                  (a.exclave, 'private/preboot/Cryptexes/ExclaveOS')]:
             destination = replace_directory(mount, relative)
             copy_tree(source, destination)
+        install_shared_cache_view(mount)
         verify_cryptex_views(mount)
         applications = directory_in_root(mount, 'Applications')
         for app in (a.system_root / 'private/var/staged_system_apps').iterdir():

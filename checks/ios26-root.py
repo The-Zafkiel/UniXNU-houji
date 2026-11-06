@@ -49,7 +49,23 @@ with tempfile.TemporaryDirectory(prefix='houji26-root-') as temporary:
     cache.mkdir(parents=True)
     main_cache = cache / 'dyld_shared_cache_arm64e'
     main_cache.write_bytes(b'dyld_v1  arm64e\0\0')
+    rejected(module.verify_cryptex_views, image)
+    module.install_shared_cache_view(image)
     module.verify_cryptex_views(image)
+    fallback = image / 'System/Library/Caches/com.apple.dyld'
+    assert (fallback / main_cache.name).read_bytes() == main_cache.read_bytes()
+    module.install_shared_cache_view(image)
+    fallback.unlink()
+    fallback.mkdir()
+    (fallback / 'retained').write_text('must survive')
+    rejected(module.install_shared_cache_view, image)
+    assert (fallback / 'retained').read_text() == 'must survive'
+    (fallback / 'retained').unlink();fallback.rmdir()
+    fallback.symlink_to(outside, target_is_directory=True)
+    rejected(module.install_shared_cache_view, image)
+    rejected(module.verify_cryptex_views, image)
+    fallback.unlink()
+    module.install_shared_cache_view(image)
     (image / 'System/Cryptexes/OS').unlink()
     (image / 'System/Cryptexes/OS').symlink_to(str(outside))
     rejected(module.verify_cryptex_views, image)

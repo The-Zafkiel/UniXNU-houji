@@ -544,7 +544,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v14-HFS-EL0-dyld-missing-library",
+      "profile": "full-system-v15-HFS-EL0-dyld-exit-reason-captured",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -554,7 +554,7 @@
       "user_entry_verified": true,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Current-trial CRC confirms hfs callback 0, ordinary /sbin/launchd size 33680 and valid arm64e Mach-O, successful image load/signature checks. User photo shows stock /sbin/launchd.ios reached dyld then exited with namespace 6/code 1 because libSystem.B.dylib was unavailable. This proves stage0/helper EL0 progression, not stock launchd main or desktop. Restore canonical preboot cryptex paths and stock symlinks; reserve a normal-context PID1 terminal reason checkpoint.",
+      "result": "Current-trial identity and header/payload CRC confirm actual HFS mount, successful exec returns for stage0, helper init and stock launchd. Reserved normal-context critical-exit result captured namespace 6/code 1 and full libSystem.B.dylib reason: no such file, no dyld cache. It matches user photo IMG_0929, so this PID1/dyld failure no longer requires a photograph. Canonical Cryptex layout v4 is installed with all 256 chunks verified, but alone did not solve shared-cache discovery. Stock launchd main, desktop and Metal shaders remain unverified.",
       "native_HFSX_mounted": true,
       "init_exec_attempted": true,
       "GPU_2D_startup_self_test": {
@@ -578,30 +578,26 @@
       },
       "PID1_startup_results": {
         "initial_exec_begin": true,
-        "clone_ready": true,
-        "image_activation_observed": true,
-        "exec_return_observed": false,
+        "exec_return_observed": true,
         "helper_init_observed": true,
-        "stock_launchd_main_observed": false,
-        "vnode_header_ready": true,
-        "image_activation_result": 0,
-        "exec_result": 0,
-        "image_loaded": true,
-        "header_words": [
-          4277009103,
-          16777228,
-          2147483650,
-          2,
-          9,
-          976,
-          1,
-          0
+        "stock_launchd_exec_observed": true,
+        "exec_paths": [
+          "/sbin/launchd",
+          "/redwood/sbin/init",
+          "/sbin/launchd.ios"
         ],
-        "file_bytes": 33680,
-        "read_bytes": 16384,
-        "read_resid": 0
+        "exec_result": 0,
+        "stock_launchd_main_observed": false,
+        "critical_exit_recorded": true,
+        "exit_namespace": 6,
+        "exit_subcode": 1,
+        "exit_status": 6,
+        "exit_library": "/usr/lib/libSystem.B.dylib",
+        "exit_reason": "no such file, no dyld cache",
+        "photo_matches_automatic_reason": true,
+        "detailed_vnode_MachO_records_enabled": false
       },
-      "recovery_seen_within_seconds": 242,
+      "recovery_seen_within_seconds": 209,
       "coherence_probe": {
         "status": 0,
         "phase": 6,
@@ -721,7 +717,7 @@
       "root_image_verified": true,
       "hardware_verified": false,
       "root_image_verification": {
-        "scope": "Local image assembly and filesystem only; not installed or hardware verified",
+        "scope": "Historical v3 assembly receipt; replaced on the test device by canonical-layout v4. Local filesystem checks are not desktop qualification.",
         "bytes": 34359738368,
         "sha256": "79540c8a19dcc9fa0c1961283e6966ad908166d6ebdb5edfe3d1b8228f5319a2",
         "verified_donor_entries": 462899,
@@ -740,7 +736,9 @@
         "stock_aliases_and_numeric_owners": true,
         "shared_cache_files_unchanged": 86,
         "filesystem_check": "PASS",
-        "installed_or_booted": false
+        "installed_or_booted": true,
+        "installed_all_256_chunks_verified": true,
+        "stock_launchd_dyld_failure_unchanged": true
       }
     },
     "full_system_boot": {

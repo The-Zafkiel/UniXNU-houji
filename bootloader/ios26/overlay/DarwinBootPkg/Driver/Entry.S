@@ -5,25 +5,31 @@ ASM_FUNC(DarwinCurrentEl)
   mrs x0, CurrentEL
   ret
 
+.macro DarwinPaint lo, hi
+  cbz x13, 9f
+  mov x9, x14
+  cbz x9, 9f
+  mov w10, #\lo
+  movk w10, #\hi, lsl #16
+  mov x11, x13
+8:
+  stp w10, w10, [x11], #8
+  subs x9, x9, #8
+  b.hi 8b
+  dsb sy
+9:
+.endm
+
 // x0=boot_args PA, x1=entry PA, x2=owned PA, x3=owned size, x4=frame buffer
 // PA (0 for none), x5=its size in bytes. EL1 only.
 ASM_FUNC(DarwinEnter)
   msr daifset, #15
   mov x12, x6 // per-boot kernel key block, installed after firmware exit
-  // Breadcrumb: a green bar (BGRA 0xFF00FF00) over the top 1/16 of the frame
-  // buffer shows that this code ran, whatever the kernel does afterwards.
-  cbz x4, 2f
-  lsr x9, x5, #4
-  bic x9, x9, #7
-  mov w10, #0xFF00
-  movk w10, #0xFF00, lsl #16
-  mov x11, x4
-3:
-  stp w10, w10, [x11], #8
-  subs x9, x9, #8
-  b.hi 3b
-  dsb sy
-2:
+  // Registers x0..x3 and the key pointer survive every screen-only marker.
+  mov x13, x4
+  lsr x14, x5, #4
+  bic x14, x14, #7
+  DarwinPaint 0xFF00, 0xFF00 // green: post-EBS assembly entered
   add x5, x2, x3
   mrs x6, ctr_el0
   ubfx x6, x6, #16, #4
@@ -41,6 +47,7 @@ ASM_FUNC(DarwinEnter)
   ic iallu
   dsb sy
   isb
+  DarwinPaint 0xFF00, 0xFFFF // yellow: whole-window cache maintenance finished
 
   // UEFI used its own keys through ExitBootServices. Install XNU's keys now.
   cbz x12, 4f
@@ -71,6 +78,7 @@ ASM_FUNC(DarwinEnter)
   tlbi vmalle1
   dsb sy
   isb
+  DarwinPaint 0xFFFF, 0xFF00 // cyan: XNU keys installed, MMU off, about to branch
   br x1
 
 // PSCI CPU_ON enters with MMU off and x0 = the real XNU reset-vector PA.

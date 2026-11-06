@@ -533,13 +533,17 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v1",
+      "profile": "full-system-v2",
       "UEFI_UFS_GPT_FAT_verified": true,
+      "owned_8GiB_memory_test_verified": true,
+      "PAC_setup_verified": true,
+      "touch_firmware_handoff_verified": true,
+      "loader_handoff_assembly_verified": true,
       "kernel_entry_verified": false,
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Owner photo confirms UEFI checkpoint creation refused existing UniXNU.log (Already started); no kernel/GPU entry in this attempt. Owner returned to OrangeFox."
+      "result": "Owner photo shows full memory test, PAC fixups and green handoff bar; no XNU text. Before EBS, FAT cache flush was denied with -EROFS (SCSI 0x35) after data-write gate closed. Owner returned to OrangeFox."
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -661,7 +665,15 @@
       "runtime_collectors": false,
       "hardware_verified": false,
       "uefi_overlay": "uefi/ios26/overlay",
-      "early_startup_failure_recovery": "Before any GPU preparation only; exact live no-wipe BCB proof, ten-second countdown, direct reset while handlers remain resident"
+      "early_startup_failure_recovery": "Before any GPU preparation only; exact live no-wipe BCB proof, ten-second countdown, direct reset while handlers remain resident",
+      "screen_breadcrumbs": {
+        "green": "post-EBS loader entry",
+        "yellow": "whole-window cache maintenance complete",
+        "cyan": "XNU keys installed and MMU off before kernel branch",
+        "magenta": "actual kernel cold entry",
+        "white": "bootstrap page tables prepared before MMU enable"
+      },
+      "flush_policy": "Only exact payload-free LUN0 SYNCHRONIZE CACHE is independent of write arming; WRITE10 retains the original arm and fixed logfs range"
     },
     "minimum_device_result": {
       "kernel_entry_verified": true,

@@ -83,6 +83,8 @@ with tempfile.TemporaryDirectory(prefix='houji26-system-') as temporary:
     relative = Path('Platforms/Xiaomi/houjiPkg/Application/HoujiStorageProbe/HoujiStorageProbe.c')
     source = temporary / relative;source.parent.mkdir(parents=True)
     source.write_bytes((ROOT / 'uefi/overlay' / relative).read_bytes())
+    guard = relative.with_name('UfsLogWriteGuard.h')
+    (temporary / guard).write_bytes((ROOT / 'uefi/overlay' / guard).read_bytes())
     subprocess.run(['git', 'apply', str(ROOT / 'uefi/ios26/patches/local.patch')], cwd=temporary, check=True)
     content = source.read_text()
     args = re.search(r'CONST CHAR16 \*BaseBootArgs = L"([^"\n]+)";', content)[1]
@@ -101,5 +103,27 @@ with tempfile.TemporaryDirectory(prefix='houji26-system-') as temporary:
                     '-I', str(ROOT / 'uefi/overlay' / relative.parent),
                     str(ROOT / 'checks/ios26-startup.c'), '-o', str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
+    flush = temporary / 'flush'
+    subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                    '-I', str(source.parent), str(ROOT / 'checks/ios26-flush.c'), '-o', str(flush)], check=True)
+    subprocess.run([str(flush)], check=True)
+    includes = ['-I', str(ROOT / 'checks/ios26-uefi'), '-I', str(ROOT / 'bootloader/ios26/overlay/DarwinBootPkg/Driver')]
+    offsets = temporary / 'offsets'
+    subprocess.run(['clang', '-std=c11', '-DPRINT_OFFSETS', *includes,
+                    str(ROOT / 'checks/ios26-screen.c'), '-o', str(offsets)], check=True)
+    (temporary / 'offsets.h').write_bytes(subprocess.check_output([str(offsets)]))
+    assembly = temporary / 'screen.S'
+    assembly.write_text('#define HOUJI_IOS26 1\n#include "offsets.h"\n#include "HoujiEarly26.inc"\n'
+                        '.text\n.globl _test_screen\n.p2align 2\n_test_screen:\n'
+                        'stp x20,x30,[sp,#-16]!\nmov x20,x0\nHOUJI26_SCREEN 0x00ff,0xffff\n'
+                        'ldp x20,x30,[sp],#16\nret\n')
+    screen = temporary / 'screen'
+    subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all', *includes,
+                    '-I', str(ROOT / 'kernel/ios26/overlay/osfmk/arm64'),
+                    str(assembly), str(ROOT / 'checks/ios26-screen.c'), '-o', str(screen)], check=True)
+    subprocess.run([str(screen)], check=True)
 print('PASS: production full-system ADT preserves houji hardware, validates CPU/GPU slots and fresh entropy; applied UEFI uses Darwin 25 bounds and mandatory startup gates; no hardware emulation')
 print('PASS: production early-failure recovery requires exact live BCB readback, preserves status, waits ten seconds, retains handlers and performs no writes; host callbacks only')
+print('PASS: exact no-payload LUN0 flush survives a closed data-write gate; WRITE10 still requires arming and its bounded range; actual AArch64 screen marker checks pixel bounds/invalid geometry; no firmware or MMU emulation')

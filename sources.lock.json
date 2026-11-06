@@ -531,7 +531,7 @@
       "scope": "Explicit one-attempt profile; bounded on_return reset; original menu behavior remains default",
       "overlay": "bootloader/ios26/manager/overlay"
     },
-    "testing_paused_by_user": true,
+    "testing_paused_by_user": false,
     "latest_device_result": {
       "kernel_entry_verified": true,
       "user_entry_verified": true,
@@ -645,6 +645,18 @@
         "installed": false,
         "phone_accessed": false
       }
+    },
+    "full_system_boot": {
+      "adt_builder": "tools/make-ios26-system-adt.py",
+      "uefi_patch": "uefi/ios26/patches/local.patch",
+      "uefi_patch_applies_after": "uefi/overlay",
+      "cpus": 8,
+      "memory_bytes": 8589934592,
+      "command_line_bytes": 1024,
+      "trial_seconds": 300,
+      "requires_fresh_UFS_GPU_binding": true,
+      "runtime_collectors": false,
+      "hardware_verified": false
     }
   }
 }

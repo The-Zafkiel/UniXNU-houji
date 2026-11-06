@@ -4,8 +4,8 @@
 iOS16 调试并要求转向小米 15 参考项目所用的 iOS26。当前已经编译并链接 XNU12377 arm64e / HOUJI 16 KiB 内核和新 DarwinBoot。
 2026-11-06 的 RAM 静态 PID1 镜像已在小米 14 实机运行，屏幕显示 Darwin 25.6.0 和
 `HOUJI IOS26 ARM64E PID1 REACHED`。UEFI、标准 PAC、单核 XNU、RAM root 和最小
-用户进程已有屏幕证据；完整系统、GPU 和旧功能仍在迁移与验证。用户已暂缓后续实机
-测试和手机分区写入，当前继续本地镜像组装与代码检查。
+用户进程已有屏幕证据；完整系统、GPU 和旧功能仍在迁移与验证。用户已恢复实机测试
+授权，完整系统卷的首次设备测试正在准备。
 
 ## 固定输入
 
@@ -196,9 +196,11 @@ cryptex 的所有者和权限误作比较；原版供体挂载保持只读。
 `79540c8a19dcc9fa0c1961283e6966ad908166d6ebdb5edfe3d1b8228f5319a2`。
 这些检查只针对本地镜像，不证明 launchd、系统应用或 GPU 已在手机运行。
 
-镜像未安装，手机端操作按用户要求暂停。恢复实机测试后，完整系统启动仍需重新
-绑定本次 UFS/GPU 启动资格材料、核对 Recovery 恢复入口，并准备与新内核配套的
-多核和内存交接配置；不能直接复用单核 RAM PID1 镜像或旧轮次 GPU 绑定。
+完整系统测试需要重新绑定本次 UFS/GPU 启动资格材料、核对 Recovery 恢复入口，
+并准备与新内核配套的多核和内存交接配置；不能直接复用单核 RAM PID1 镜像或
+旧轮次 GPU 绑定。当前八核 ADT 保留 houji 的全部硬件节点，仅取供体的非唯一
+用户空间型号标识。完整系统 UEFI 补丁采用 Darwin 25 的 1024 字节命令行，
+保留 UFS/GPU 启动资格检查，关闭运行期追踪，定时恢复设为 300 秒。
 首次完整系统使用的 Data 仍是 ramfs，持久化、旧数据迁移和所有既有功能的 iOS26
 运行期验收尚未完成。
 
@@ -209,6 +211,10 @@ cryptex 的所有者和权限误作比较；原版供体挂载保持只读。
 - `tools/prepare-ios26-sources.py bootloader` 与 `boot_manager`：分别组装 DarwinBoot
   和带单次返回策略的 UniXNU；上游目录只读，输出必须是新目录。
 - `tools/build-ios26-kernel.sh`：使用 `HOUJI_XNU`、`HOUJI_REFERENCE` 指定私有依赖。
+- `tools/make-ios26-system-adt.py`：从已验证的本机八核 ADT 生成完整 HFS 系统配置，
+  保留物理节点和空 GPU 交接槽，每次产生独立 PAC 材料；仍需本次设备启动绑定。
+- `uefi/ios26/patches/local.patch`：应用到已组装 `uefi/overlay` 的私有 UEFI 树，
+  扩展完整系统的命令行预算并设置有界恢复；首次 PID1 配置不使用此入口。
 - `tools/build-ios26-bridge.py`：本地 nightly prefix、作者提供的 AIR 和独立 Cargo cache；
   工具链分发版本/hash 与 PAC target 记录在 `sources.lock.json` 的 `ios26.rust`。
 - `tools/build-userland-compat.py --profile ios26`：键盘与状态栏的 arm64e 库。

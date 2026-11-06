@@ -90,3 +90,30 @@ diff --git a/iokit/Kernel/houji-ufs-root/HoujiUfsRead.cpp b/iokit/Kernel/houji-u
    // The armed window contains only the 16 preallocated file data sectors.
    // Commit header last, with a cache flush at each boundary. No FAT writes.
    gLogArmed=true;
+diff --git a/iokit/Kernel/houji-ufs-root/HoujiGpuCoherenceProbe.inc b/iokit/Kernel/houji-ufs-root/HoujiGpuCoherenceProbe.inc
+--- a/iokit/Kernel/houji-ufs-root/HoujiGpuCoherenceProbe.inc
++++ b/iokit/Kernel/houji-ufs-root/HoujiGpuCoherenceProbe.inc
+@@ -192,6 +192,9 @@
+  p.code=NativeAdrenoMaintainOwnedPages(p.backing.mapping(),HoujiCoherenceBytes,NativeAdrenoCleanInvalidate);
+  return p.code?18:0;
+ }
++#if HOUJI_IOS26
++#include "HoujiCoherenceFallback26.inc"
++#endif
+ static void houjiCoherenceDeadline(void*,wait_result_t) {
+  uint64_t began=houjiSubmitNow(nullptr);
+  while(!__atomic_load_n(&gHoujiCoherence.done,__ATOMIC_ACQUIRE) && houjiSubmitNow(nullptr)-began<30000000)IOSleep(100);
+@@ -214,6 +217,13 @@
+    houjiFullRaw32(0x3d02084,&protect)|houjiFullRaw32(0x3dc0058,&fsr);
+   IOLog("HOUJI COHERENCE RING: direction=%u seq=%u observed=%u read=%u RPTR=%u WPTR=%u RBBM=%x IRQ=%x protect=%x FSR=%x\n",p.direction,gHoujiSubmit.seq,gHoujiSubmit.observed,read,rp,wp,rbbm,irq,protect,fsr);
+  }
++#if HOUJI_IOS26
++ if(houjiCoherenceFallback26(status)){
++  IOLog("HOUJI26 COHERENCE FALLBACK: status=11 dirty=%u/64; probe mappings removed, owner retained; explicit cache maintenance enabled, coherence capability off\n",p.dirty);
++  houji_ufs_checkpoint("inconclusive dirty-cache precondition; retained GPU with explicit cache maintenance; no coherence claim",0);
++  __atomic_store_n(&p.done,1u,__ATOMIC_RELEASE);return;
++ }
++#endif
+  if(gHoujiLive.mode==5 && !status && p.pass && p.render_pass && p.copies==2 &&
+     p.draws==8 && p.unmapped && !p.handle && !p.command_mapped && houjiVmIdle() &&
+     !gHoujiApi.submit.outstanding() && houjiFullLease() && houjiFullTables()){

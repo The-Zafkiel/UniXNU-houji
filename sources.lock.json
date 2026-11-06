@@ -522,7 +522,8 @@
       "panic_record_parser_and_bounds": true,
       "finite_pid1_startup_hooks_linked": true,
       "initialized_panic_record_bounds": true,
-      "full_system_boot_epoch": true
+      "full_system_boot_epoch": true,
+      "coherence_precondition_fallback": true
     },
     "not_yet_qualified": [
       "stock iOS26 launchd, userland runtime and desktop",
@@ -539,7 +540,7 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "profile": "full-system-v8-first-PID1-exec",
+      "profile": "full-system-v9-coherence-precondition-inconclusive",
       "kernel_entry_verified": true,
       "native_UFS_initialized": true,
       "native_HFSX_identity_verified": true,
@@ -549,9 +550,9 @@
       "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "Current-trial header/payload CRC passed. Same native GPU 2D/coherence/provider startup and HFS mount; optional finite PID1 result records /sbin/launchd exec begin at 80.8 seconds, with no later result. Recovery observed within 238 seconds; image activation vs task handoff unresolved, no EL0/GUI/Metal shader proof.",
-      "native_HFSX_mounted": true,
-      "init_exec_attempted": true,
+      "result": "Current-trial CRC passed. Native 2D, VM/API and four concurrent GPU/UFS jobs passed. Optional coherence probe returned status 11 after eight attempts and zero dirty lines; allowed cached/uncached views resolved correctly. No coherence commands or PID1 progress observed. Original diagnostic path stopped the GPU; restricted iOS26 fallback awaits hardware qualification.",
+      "native_HFSX_mounted": false,
+      "init_exec_attempted": false,
       "GPU_2D_startup_self_test": {
         "PAS_authenticated": true,
         "submit_kinds_passed": [
@@ -562,7 +563,7 @@
         "pixels_verified": 1024,
         "markers_verified": 8,
         "image_crc32": "e843b26a",
-        "retained_owner_root_ring": true,
+        "retained_owner_root_ring": false,
         "Metal_shaders_verified": false
       },
       "prior_panic_RAM_read": {
@@ -572,12 +573,22 @@
         "reason_retrieved": false
       },
       "PID1_startup_results": {
-        "initial_exec_begin": true,
+        "initial_exec_begin": false,
         "exec_return_observed": false,
         "helper_init_observed": false,
         "stock_launchd_main_observed": false
       },
-      "recovery_seen_within_seconds": 238
+      "recovery_seen_within_seconds": 189,
+      "coherence_probe": {
+        "status": 11,
+        "phase": 3,
+        "attempts": 8,
+        "dirty_lines": 0,
+        "copy_commands": 0,
+        "render_commands": 0,
+        "proof": false,
+        "result": "inconclusive precondition"
+      }
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -712,7 +723,8 @@
       "terminal_screen": "Existing mapped console and kernel font only; panic/halt visible up to 90 seconds, clamped to original trial deadline. Normal deadline includes its 20-second display. No panic allocation, new mapping, UFS I/O or UEFI return. Screen visibility remains unqualified.",
       "panic_reason_record": "First formatted panic or handled terminal reason in owned RAM only, with current-trial identity and CRC; initialized-empty state is distinct. Exact locator is in existing startup header. Optional next-UEFI reader defaults off; bounds/translation/identity/CRC enforced. Current Recovery path did not retain a matching record, so no error reason recovered.",
       "pid1_startup_results": "Optional houji_pid1_startup=1, default off; native-root and bounded-Recovery gates; up to eight approved PID1 exec/main and authorized reboot results in normal interruptible context only, using the existing startup file. No periodic runtime collector; successful exec is not EL0 execution proof.",
-      "calendar_source": "Fresh 64-bit host boot-epoch in chosen, consumed by GenericARMPE; unused iOS16 houji_epoch argument removed; no RTC qualification"
+      "calendar_source": "Fresh 64-bit host boot-epoch in chosen, consumed by GenericARMPE; unused iOS16 houji_epoch argument removed; no RTC qualification",
+      "coherence_fallback": "Only optional mode 5 status 11 with phase 3, valid views, eight inconclusive dirty-line attempts and no coherence work submitted. Require original idle owner, remove both probe mappings and clean/invalidate owned scratch before continuing mode 3 with coherence off. Any cleanup or other qualification failure retains terminal stop; hardware qualification pending."
     },
     "minimum_device_result": {
       "kernel_entry_verified": true,

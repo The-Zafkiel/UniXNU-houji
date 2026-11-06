@@ -276,3 +276,9 @@ stock launchd 的 main 通知在独立的一次性线程保存，避免在 sysct
 - `tools/build-ios26-userland.py`：从固定参考源码编译最小 HFS stage0、init、inject26 和当前供体 Data 模板。
 - `tools/build-ios26-root.py --plan`：核对稳定 Recovery 备份、只读供体挂载及已构建组件，输出本地组装方案。
   实际组装需要 macOS 管理员认证以保存 iOS 数字所有者；只操作新建的本地 HFS 镜像，不能安装手机分区。
+
+完整系统的可选 coherence mode 5 不再把 status 11 的不确定脏缓存前提当成 GPU
+资格失败。iOS26 专用回退要求 phase 3、八次尝试、合法的 CPU 别名、没有提交
+copy/render 和空闲的原 owner；两组探针映射移除及 owned scratch 的 clean/invalidate
+全部成功后，保留资源并继续原模式 3，显式缓存维护保持启用。其他错误仍走原停止
+路径。此改动不宣称硬件一致性，也不改动 iOS16 的共享实现。

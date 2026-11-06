@@ -533,11 +533,13 @@
     },
     "testing_paused_by_user": false,
     "latest_device_result": {
-      "kernel_entry_verified": true,
-      "user_entry_verified": true,
+      "profile": "full-system-v1",
+      "UEFI_UFS_GPT_FAT_verified": true,
+      "kernel_entry_verified": false,
+      "user_entry_verified": false,
       "GPU_verified": false,
       "GUI_verified": false,
-      "result": "2026-11-06 owner screen photo shows Darwin 25.6.0, initialized GIC/VM/IOKit/HFS and HOUJI IOS26 ARM64E PID1 REACHED. RAM-only one-CPU trial; no physical root install or runtime collectors."
+      "result": "Owner photo confirms UEFI checkpoint creation refused existing UniXNU.log (Already started); no kernel/GPU entry in this attempt. Owner returned to OrangeFox."
     },
     "rust": {
       "channel": "nightly-2026-11-03",
@@ -644,7 +646,8 @@
         "data_mode": "fresh ramfs template; persistence not yet qualified",
         "installed": false,
         "phone_accessed": false
-      }
+      },
+      "root_installed_and_readback_verified": true
     },
     "full_system_boot": {
       "adt_builder": "tools/make-ios26-system-adt.py",
@@ -656,7 +659,17 @@
       "trial_seconds": 300,
       "requires_fresh_UFS_GPU_binding": true,
       "runtime_collectors": false,
-      "hardware_verified": false
-    }
+      "hardware_verified": false,
+      "uefi_overlay": "uefi/ios26/overlay",
+      "early_startup_failure_recovery": "Before any GPU preparation only; exact live no-wipe BCB proof, ten-second countdown, direct reset while handlers remain resident"
+    },
+    "minimum_device_result": {
+      "kernel_entry_verified": true,
+      "user_entry_verified": true,
+      "GPU_verified": false,
+      "GUI_verified": false,
+      "result": "2026-11-06 owner screen photo shows Darwin 25.6.0, initialized GIC/VM/IOKit/HFS and HOUJI IOS26 ARM64E PID1 REACHED. RAM-only one-CPU trial; no physical root install or runtime collectors."
+    },
+    "hardware_boot_scope": "RAM static arm64e PID1 only; full-system boot still pending"
   }
 }

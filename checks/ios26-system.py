@@ -93,4 +93,13 @@ with tempfile.TemporaryDirectory(prefix='houji26-system-') as temporary:
                                    'houji_return_recovery=1', 'houji_trial_seconds=300',
                                    'houji_gpu_runtime=5', 'gtrace=0', 'sweetsample=-', 'sweetiolog=-'))
     assert 'mTouchHandoffReady?1:0' in content
+    assert content.index('Status = RunLogFsTest (ImageHandle);') < content.index('Houji26StartupFailureReset (Status, StartupRecoveryReady)') < content.index('Status=GpuPowerHandoffPrepare(ImageHandle);')
+    executable = temporary / 'startup-recovery'
+    subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                    '-I', str(ROOT / 'uefi/ios26/overlay' / relative.parent),
+                    '-I', str(ROOT / 'uefi/overlay' / relative.parent),
+                    str(ROOT / 'checks/ios26-startup.c'), '-o', str(executable)], check=True)
+    subprocess.run([str(executable)], check=True)
 print('PASS: production full-system ADT preserves houji hardware, validates CPU/GPU slots and fresh entropy; applied UEFI uses Darwin 25 bounds and mandatory startup gates; no hardware emulation')
+print('PASS: production early-failure recovery requires exact live BCB readback, preserves status, waits ten seconds, retains handlers and performs no writes; host callbacks only')

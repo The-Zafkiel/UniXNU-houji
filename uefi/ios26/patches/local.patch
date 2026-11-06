@@ -23,7 +23,26 @@
    return Loader->Boot (Loader, &Request);
  }
  
-@@ -1171,7 +1171,7 @@
+@@ -948,6 +948,8 @@
+  return Status==EFI_SUCCESS?EFI_SUCCESS:EFI_ERROR(Status)?Status:EFI_DEVICE_ERROR;
+ }
+ 
++
++#include "Houji26StartupRecovery.h"
+ 
+ STATIC EFI_STATUS
+ RunUfsReadonly (EFI_HANDLE ImageHandle)
+@@ -1020,7 +1022,9 @@
+   }
+   if (mLogFsTestRun && !EFI_ERROR (Status)) {
+     // Establish a durable, validated log BEFORE entering experimental GPU I/O.
++    BOOLEAN StartupRecoveryReady = mXnuUfsRun && Houji26StartupRecoveryReady ();
+     Status = RunLogFsTest (ImageHandle);
++    if (mXnuUfsRun && EFI_ERROR (Status)) { Houji26StartupFailureReset (Status, StartupRecoveryReady); }
+     if (mXnuUfsRun && !EFI_ERROR(Status)) {
+       if(HOUJI_GPU_POWER_HANDOFF_XNU_ONLY) {
+         Print(L"HOUJI GPU POWER HANDOFF: UEFI power/clocks only; XNU fresh RO observation\n");
+@@ -1171,7 +1175,7 @@
      mUfsHandoffRun = Self->LoadOptionsSize == sizeof (L"--ufs-handoff-check");
      mLogFsTestRun = mXnuUfsRun || mUfsHandoffRun || Self->LoadOptionsSize == sizeof (L"--logfs-write-test");
      if (mLogFsTestRun) {

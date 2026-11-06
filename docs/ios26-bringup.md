@@ -114,7 +114,7 @@ XNU 的配套 SDK 符号导出步骤仍报告参考工程缺少的 Apple 私有�
 | --- | --- |
 | arm64e 内核、PAC、启动参数和 RAM root | 已实机运行至自编 arm64e PID1；屏幕证据确认 |
 | 单核/PSCI/GIC | 单核内核和调度器已运行，GIC 初始化可见；多核仍待验证 |
-| UFS/持久系统卷 | 原生 UFS 入口与 HFS715 已链接；完整 iOS26 root 已离线组装和校验，未安装或实机启动 |
+| UFS/持久系统卷 | 原生 UFS 入口与 HFS715 已链接；完整 iOS26 root 已安装且 256 块读回一致，内核挂载与用户空间启动待验 |
 | A750/Metal/Turnip | arm64e Metal frontend、bridge/std 和 Turnip 已实际构建、链接、签名；设备 GPU 待验证 |
 | 多核、CPU/GPU DVFS、热控 | 策略保留，iOS26 启用与实机验证待完成 |
 | 触摸、亮度、电池和 USB 充电状态 | 硬件适配已编译，完整系统服务待验证 |
@@ -194,13 +194,21 @@ cryptex 的所有者和权限误作比较；原版供体挂载保持只读。
 12,469,788,672 字节。镜像包含 548 个 launchd job，运行期日志搜集器保持关闭。
 生成后镜像设为只读，SHA-256 为
 `79540c8a19dcc9fa0c1961283e6966ad908166d6ebdb5edfe3d1b8228f5319a2`。
-这些检查只针对本地镜像，不证明 launchd、系统应用或 GPU 已在手机运行。
+以上离线检查不证明 launchd、系统应用或 GPU 已在手机运行。用户恢复测试授权后，
+已在 OrangeFox 将镜像写入既有的 32 GiB 窗口，256 个数据块全部直接读回一致，
+启动分区、各 GPT、misc 及系统卷上边界保持不变，原 iOS16 完整快照保留。
 
 完整系统测试需要重新绑定本次 UFS/GPU 启动资格材料、核对 Recovery 恢复入口，
 并准备与新内核配套的多核和内存交接配置；不能直接复用单核 RAM PID1 镜像或
 旧轮次 GPU 绑定。当前八核 ADT 保留 houji 的全部硬件节点，仅取供体的非唯一
 用户空间型号标识。完整系统 UEFI 补丁采用 Darwin 25 的 1024 字节命令行，
 保留 UFS/GPU 启动资格检查，关闭运行期追踪，定时恢复设为 300 秒。
+首轮完整系统测试在 UEFI 的检查文件创建处返回 `Already started`，屏幕确认 UFS、
+GPT 和 FAT 已通过，但 XNU 尚未进入：上一轮 `UniXNU.log` 仍存在，防覆盖检查拒绝
+创建新文件。每次测试准备必须保存稳定的原分区备份、腾出旧检查文件名，并在发送
+镜像前再次确认该文件不存在；不能通过跳过检查继续启动。修正版在任何 GPU 准备
+之前读取并核对精确的 Recovery BCB，若检查文件阶段失败则保留 UFS 异常处理器，
+显示错误 10 秒后直接重启。无法取得实际 BCB 证明时仍停止，不卸载持有处理器的应用。
 首次完整系统使用的 Data 仍是 ramfs，持久化、旧数据迁移和所有既有功能的 iOS26
 运行期验收尚未完成。
 
@@ -214,7 +222,8 @@ cryptex 的所有者和权限误作比较；原版供体挂载保持只读。
 - `tools/make-ios26-system-adt.py`：从已验证的本机八核 ADT 生成完整 HFS 系统配置，
   保留物理节点和空 GPU 交接槽，每次产生独立 PAC 材料；仍需本次设备启动绑定。
 - `uefi/ios26/patches/local.patch`：应用到已组装 `uefi/overlay` 的私有 UEFI 树，
-  扩展完整系统的命令行预算并设置有界恢复；首次 PID1 配置不使用此入口。
+  扩展完整系统的命令行预算并设置有界恢复；配套 `uefi/ios26/overlay` 同步到私有
+  UEFI 树。首次 PID1 配置不使用此入口。
 - `tools/build-ios26-bridge.py`：本地 nightly prefix、作者提供的 AIR 和独立 Cargo cache；
   工具链分发版本/hash 与 PAC target 记录在 `sources.lock.json` 的 `ios26.rust`。
 - `tools/build-userland-compat.py --profile ios26`：键盘与状态栏的 arm64e 库。

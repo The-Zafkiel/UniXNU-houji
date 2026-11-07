@@ -995,6 +995,41 @@ patch('bsd/dev/sweet_sample.c', [
 ])
 print('SNIPPET17_DONE')
 
+# —— 观测：显示栈的三个关键计数挪到采样块末尾（45 行可见区内）
+#    这样每张照片都能直接看出 CA 有没有开 client / 调 selector / 建 surface。
+fbo = "\t\t\t\tprintf(\"HOUJI KEYS3 pwr=%d bb=%d\\n\",\n\t\t\t\t    houji_key_pids[10], houji_key_pids[11]);\n"
+fbn = fbo + (
+    "\t\t\t\t{\n"
+    "\t\t\t\t\textern uint64_t houji_fb_open_count, houji_fb_sel_count,\n"
+    "\t\t\t\t\t    houji_surf_create_count;\n"
+    "\t\t\t\t\tuint64_t hs = 0, hp = 0;\n"
+    "\t\t\t\t\thouji_framebuffer_counts(&hs, &hp);\n"
+    "\t\t\t\t\tprintf(\"HOUJI FBX open=%llu sel=%llu surf=%llu swap=%llu pres=%llu\\n\",\n"
+    "\t\t\t\t\t    houji_fb_open_count, houji_fb_sel_count,\n"
+    "\t\t\t\t\t    houji_surf_create_count, hs, hp);\n"
+    "\t\t\t\t}\n")
+patch('bsd/dev/sweet_sample.c', [(fbo, fbn, 'FBX status line')])
+
+fbd = "static uint64_t sweet_fb_logged;        /* selectors already logged (< 64) */\n"
+fbn2 = fbd + "uint64_t houji_fb_open_count, houji_fb_sel_count;\n"
+fbs = "\tuint32_t outCount = 0;\n\n\tswitch (selector) {"
+fbs2 = ("\tuint32_t outCount = 0;\n\n"
+        "\t__atomic_add_fetch(&houji_fb_sel_count, 1ull, __ATOMIC_RELAXED);\n"
+        "\tswitch (selector) {")
+fbu = "\tIOLog(\"HOUJI FB: newUserClient type=%u ok\\n\", type);"
+fbu2 = "\t__atomic_add_fetch(&houji_fb_open_count, 1ull, __ATOMIC_RELAXED);\n" + fbu
+patch('iokit/Kernel/arm/SweetFramebuffer.cpp',
+      [(fbd, fbn2, 'fb counters'), (fbs, fbs2, 'sel counter'), (fbu, fbu2, 'open counter')])
+
+scd = "static uint32_t      sweet_surface_creates_logged;\n"
+scd2 = scd + "uint64_t             houji_surf_create_count;\n"
+sco = "\tprops->release();\n\tif (ret != kIOReturnSuccess) {\n\t\ts->release();\n\t\treturn ret;\n\t}\n"
+sco2 = ("\tif (ret == kIOReturnSuccess) {\n"
+        "\t\t__atomic_add_fetch(&houji_surf_create_count, 1ull, __ATOMIC_RELAXED);\n"
+        "\t}\n") + sco
+patch('iokit/Kernel/arm/SweetSurface.cpp',
+      [(scd, scd2, 'surf counter'), (sco, sco2, 'surf inc')])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"
@@ -1020,7 +1055,7 @@ say "6/6 校验产物"
 K=$(find "$W/out" -type f -size +5M \( -name 'kernel*' -o -name 'mach_kernel' -o -name '*.macho' \) 2>/dev/null | head -1)
 [ -n "$K" ] || die "找不到产物"
 echo "产物: $K"
-for s in 'newUserClient type=%u ok' 'oslog: LOGBUFFERMAP ret=%d' 'SYSTEM_PROXY missing, used SYSTEM' 'HOUJI FB DIAG: poll=%d' 'HOUJI OPEN #%llu' 'houji: persona type %u created' 'HOUJI PERSONA: calls=%u created=%u' 'HOUJI SPAWN FAIL %s err=%d' 'x16 %llu x0 0x%llx' 'Firehose forced on' 'HOUJI OSLOG: firehose stub' 'persona proxy uid501' 'HOUJI MKDIR %s' 'HOUJI HFS: dirty bit cleared' 'HOUJI DIRS: %d' 'HOUJI P%02d %s' 'HOUJI KEYS1' 'size=%llu persona' 'houji: persona %s uid=%u' 'houji_persona_bootstrap'; do
+for s in 'newUserClient type=%u ok' 'oslog: LOGBUFFERMAP ret=%d' 'SYSTEM_PROXY missing, used SYSTEM' 'HOUJI FB DIAG: poll=%d' 'HOUJI OPEN #%llu' 'houji: persona type %u created' 'HOUJI PERSONA: calls=%u created=%u' 'HOUJI SPAWN FAIL %s err=%d' 'x16 %llu x0 0x%llx' 'Firehose forced on' 'HOUJI OSLOG: firehose stub' 'persona proxy uid501' 'HOUJI MKDIR %s' 'HOUJI HFS: dirty bit cleared' 'HOUJI DIRS: %d' 'HOUJI P%02d %s' 'HOUJI KEYS1' 'size=%llu persona' 'houji: persona %s uid=%u' 'houji_persona_bootstrap' 'HOUJI FBX'; do
   echo "  命中[$s] = $(LC_ALL=C grep -c "$s" "$K" || true)"
 done
 shasum -a 256 "$K"; ls -l "$K"

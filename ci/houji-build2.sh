@@ -1210,6 +1210,10 @@ patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\tprintf("HOUJI USBS st=%d mk=%s md=%d dtf=%d sc=%u dn=%u prod=%d gctl=%x dsts=%x id=%x bd=%s\\n",\n\t\t\t\t\t    houji_usb_stage, houji_usb_mark, houji_usb_mod, houji_dt_fail, houji_dt_scale, houji_dt_density,\n\t\t\t\t\t    houji_dt_product, houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7], houji_usb_board);', '\t\t\t\t\tprintf("HOUJI USBS st=%d mk=%s dp=%d md=%d dtf=%d sc=%u dn=%u prod=%d gctl=%x dsts=%x id=%x bd=%s\\n",\n\t\t\t\t\t    houji_usb_stage, houji_usb_mark, houji_usb_depthv, houji_usb_mod, houji_dt_fail, houji_dt_scale,\n\t\t\t\t\t    houji_dt_density, houji_dt_product, houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7], houji_usb_board);', 'depth print'),
 ])
 
+patch('bsd/dev/houji_usb_debug.c', [
+    ('    uint32_t hs=read_reg(qs,0x10),ss=read_reg(qs,0x30);\n    *(volatile uint32_t *)(qs+0x10)=hs|(1u<<20)|(1u<<28);\n    *(volatile uint32_t *)(qs+0x30)=ss|(1u<<24);\n    __asm__ volatile("dsb sy" ::: "memory");\n    mark("i");printf("HUSB i qs=%x/%x\\n",hs,ss);\n', '    /* QSCRATCH 地址在 SM8650 上未证实，写错会挂死总线；PHY 已由 ABL 配好 */\n    mark("i");printf("HUSB i qs=%p (skipped)\\n", (void *)qs);\n', 'drop qs writes'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

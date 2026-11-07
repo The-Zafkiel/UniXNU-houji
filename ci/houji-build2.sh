@@ -1200,6 +1200,16 @@ patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\tprintf("HOUJI USBS st=%d md=%d dtf=%d sc=%u dn=%u prod=%d gctl=%x dsts=%x id=%x bd=%s\\n",\n\t\t\t\t\t    houji_usb_stage, houji_usb_mod, houji_dt_fail, houji_dt_scale, houji_dt_density, houji_dt_product,\n\t\t\t\t\t    houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7], houji_usb_board);', '\t\t\t\t\tprintf("HOUJI USBS st=%d mk=%s md=%d dtf=%d sc=%u dn=%u prod=%d gctl=%x dsts=%x id=%x bd=%s\\n",\n\t\t\t\t\t    houji_usb_stage, houji_usb_mark, houji_usb_mod, houji_dt_fail, houji_dt_scale, houji_dt_density,\n\t\t\t\t\t    houji_dt_product, houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7], houji_usb_board);', 'mark print'),
 ])
 
+# —— 采样行加 dp=内核实际读到的 houji_usb_depth
+patch('bsd/dev/houji_usb_debug.c', [
+    ('    int depth=99;PE_parse_boot_argn("houji_usb_depth",&depth,sizeof(depth));', '    int depth=99;PE_parse_boot_argn("houji_usb_depth",&depth,sizeof(depth));\n    houji_usb_depthv=depth;', 'depth global use'),
+    ('char houji_usb_mark[40];', 'char houji_usb_mark[40];\nint houji_usb_depthv;', 'depth global decl'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\textern char houji_usb_mark[40];', '\t\t\t\t\textern char houji_usb_mark[40];\n\t\t\t\t\textern int houji_usb_depthv;', 'depth extern'),
+    ('\t\t\t\t\tprintf("HOUJI USBS st=%d mk=%s md=%d dtf=%d sc=%u dn=%u prod=%d gctl=%x dsts=%x id=%x bd=%s\\n",\n\t\t\t\t\t    houji_usb_stage, houji_usb_mark, houji_usb_mod, houji_dt_fail, houji_dt_scale, houji_dt_density,\n\t\t\t\t\t    houji_dt_product, houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7], houji_usb_board);', '\t\t\t\t\tprintf("HOUJI USBS st=%d mk=%s dp=%d md=%d dtf=%d sc=%u dn=%u prod=%d gctl=%x dsts=%x id=%x bd=%s\\n",\n\t\t\t\t\t    houji_usb_stage, houji_usb_mark, houji_usb_depthv, houji_usb_mod, houji_dt_fail, houji_dt_scale,\n\t\t\t\t\t    houji_dt_density, houji_dt_product, houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7], houji_usb_board);', 'depth print'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

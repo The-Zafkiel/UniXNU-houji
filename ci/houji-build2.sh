@@ -99,9 +99,11 @@ if [ ! -f "$FR/usr/local/lib/kernel/libfirehose_kernel.a" ]; then
     cp -f "$FWLIB" "$FR/usr/local/lib/kernel/"
     echo "  取自 $FWLIB"
   else
-    printf 'int __houji_dummy_firehose_stub;\n' > "$FR/dummy.c"
-    clang -c "$FR/dummy.c" -o "$FR/dummy.o"
-    ar -rc "$FR/usr/local/lib/kernel/libfirehose_kernel.a" "$FR/dummy.o"
+    printf 'int __houji_dummy_firehose_stub(void) { return 0; }\n' > "$FR/dummy.c"
+    clang -arch arm64 -c "$FR/dummy.c" -o "$FR/dummy.o"
+    rm -f "$FR/usr/local/lib/kernel/libfirehose_kernel.a"
+    ar -rcs "$FR/usr/local/lib/kernel/libfirehose_kernel.a" "$FR/dummy.o"
+    ranlib "$FR/usr/local/lib/kernel/libfirehose_kernel.a"
     echo "  SDK/KDK 都没有，放占位归档（真符号由内核树里的 firehose_stub.c 提供）"
   fi
 fi

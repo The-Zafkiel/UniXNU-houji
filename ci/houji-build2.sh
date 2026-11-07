@@ -1219,6 +1219,13 @@ patch('bsd/dev/sweet_sample.c', [
 patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\tprintf("HOUJI USBS st=%d', '                    if ((i % 3u) == 0u) houji_disk_dump();\n                    printf("HOUJI DISK dsz=%llu p=%u e=%d\\n", houji_disk_dsz, houji_disk_w, houji_disk_e);\n\t\t\t\t\tprintf("HOUJI USBS st=%d', 'disk log call'),
 ])
+patch('bsd/dev/houji_usb_debug.c', [
+    ('    int depth=99;PE_parse_boot_argn("houji_usb_depth",&depth,sizeof(depth));\n    houji_usb_depthv=depth;\n', '    int depth=99;PE_parse_boot_argn("houji_usb_depth",&depth,sizeof(depth));\n    /* 采样线程可以抬高这个值再调一次本函数，逐级试探 */\n    if (depth < houji_usb_depthv) depth = houji_usb_depthv;\n    houji_usb_depthv=depth;\n', 'depth monotonic'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('unsigned long long houji_disk_dsz;\n', 'extern int houji_usb_depthv;\nextern void houji_usb_debug_start(void);\nunsigned long long houji_disk_dsz;\n', 'usb externs'),
+    ('                    if ((i % 3u) == 0u) houji_disk_dump();\n', '                    /* 一次开机把 depth 从 4 爬到 12，每步之后立刻落盘 */\n                    if (i >= 1u && i <= 9u) {\n                        houji_usb_depthv = 3 + (int)i;\n                        houji_usb_debug_start();\n                    }\n                    houji_disk_dump();\n', 'depth ladder'),
+])
 
 print('PATCHES_OK')
 PY

@@ -1052,6 +1052,20 @@ patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\tprintf("HOUJI FBX open=%llu sel=%llu surf=%llu swap=%llu pres=%llu h=%x:%x %x:%x %x:%x %x:%x\\n",\n\t\t\t\t\t    houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count, hs, hp,\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[0] >> 32), (unsigned)houji_fb_sel_hist[0],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[2] >> 32), (unsigned)houji_fb_sel_hist[2],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[3] >> 32), (unsigned)houji_fb_sel_hist[3]);\n', '\t\t\t\t\tprintf("HOUJI FBX open=%llu sel=%llu surf=%llu swap=%llu pres=%llu infl=%llu last=%u:%x h=%x:%x %x:%x\\n",\n\t\t\t\t\t    houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count, hs, hp,\n\t\t\t\t\t    houji_fb_inflight, houji_fb_last_sel, (unsigned)houji_fb_last_ret,\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[0] >> 32), (unsigned)houji_fb_sel_hist[0],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1]);\n', 'fbx infl fields'),
 ])
 
+# —— 观测：谁在问显示器、IOSurface 服务有没有人碰
+patch('iokit/Kernel/arm/SweetFramebuffer.cpp', [
+    ('uint32_t houji_fb_last_sel;\n', 'uint32_t houji_fb_last_sel;\nchar houji_fb_last_caller[32];\n', 'fb caller decl'),
+    ('\t__atomic_add_fetch(&houji_fb_inflight, 1ull, __ATOMIC_RELAXED);\n', '\t__atomic_add_fetch(&houji_fb_inflight, 1ull, __ATOMIC_RELAXED);\n\tproc_selfname(houji_fb_last_caller, sizeof(houji_fb_last_caller));\n', 'fb caller record'),
+])
+patch('iokit/Kernel/arm/SweetSurface.cpp', [
+    ('uint64_t             houji_surf_create_count;\n', 'uint64_t             houji_surf_create_count;\nuint64_t             houji_surf_sel_count;\nuint32_t             houji_surf_last_sel;\nchar                 houji_surf_last_caller[32];\n', 'surf sel decl'),
+    ('\tuint64_t arg0 = args->scalarInputCount > 0 ? args->scalarInput[0] : 0;\n', '\tuint64_t arg0 = args->scalarInputCount > 0 ? args->scalarInput[0] : 0;\n\t__atomic_add_fetch(&houji_surf_sel_count, 1ull, __ATOMIC_RELAXED);\n\t__atomic_store_n(&houji_surf_last_sel, selector, __ATOMIC_RELAXED);\n\tproc_selfname(houji_surf_last_caller, sizeof(houji_surf_last_caller));\n', 'surf sel record'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\textern uint32_t houji_fb_last_sel;\n', '\t\t\t\t\textern uint32_t houji_fb_last_sel;\n\t\t\t\t\textern char houji_fb_last_caller[32];\n\t\t\t\t\textern uint64_t houji_surf_sel_count;\n\t\t\t\t\textern uint32_t houji_surf_last_sel;\n\t\t\t\t\textern char houji_surf_last_caller[32];\n', 'sfx extern'),
+    ('\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1]);\n', '\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1]);\n\t\t\t\t\tprintf("HOUJI SFX fbwho=%s sfcall=%llu sflast=%u sfwho=%s\\n",\n\t\t\t\t\t    houji_fb_last_caller, houji_surf_sel_count,\n\t\t\t\t\t    houji_surf_last_sel, houji_surf_last_caller);\n', 'sfx print'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

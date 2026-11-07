@@ -483,13 +483,17 @@ nu_old = ("IOReturn" + NL
           + "    UInt32 type, OSDictionary * properties," + NL
           + "    IOUserClient ** handler )" + NL + "{" + NL)
 nu_new = nu_old + (
-    T + "static uint64_t houji_opens;" + NL
-    + T + "uint64_t hnum = __atomic_add_fetch(&houji_opens, 1, __ATOMIC_RELAXED);" + NL
-    + T + "if (hnum <= 400) {" + NL
-    + T + T + "kprintf(" + Q + "HOUJI OPEN #%llu %s type=%u" + BS + "n" + Q + "," + NL
-    + T + T + "    (unsigned long long)hnum, getMetaClass()->getClassName(), (unsigned)type);" + NL
+    T + "{" + NL
+    + T + "    char houji_nm[32];" + NL
+    + T + "    proc_selfname(houji_nm, sizeof(houji_nm));" + NL
+    + T + "    if (strncmp(houji_nm, " + Q + "backboardd" + Q + ", 10) == 0 ||" + NL
+    + T + "        strncmp(houji_nm, " + Q + "SpringBoard" + Q + ", 11) == 0) {" + NL
+    + T + "        strlcpy(houji_iok_ring[houji_iok_ring_idx++ % 6]," + NL
+    + T + "            getMetaClass()->getClassName(), sizeof(houji_iok_ring[0]));" + NL
+    + T + "        __atomic_add_fetch(&houji_iok_count, 1u, __ATOMIC_RELAXED);" + NL
+    + T + "    }" + NL
     + T + "}" + NL)
-patch('iokit/Kernel/IOService.cpp', [(nu_old, nu_new, 'open trace')])
+patch('iokit/Kernel/IOService.cpp', [(nu_old, nu_new, 'userclient trace')])
 
 log_old = "\t\tif (ret == KERN_SUCCESS) {\n\t\t\tmap_info.fbmi_addr = (uint64_t) (user_addr);"
 log_new = ("\t\tprintf(\"oslog: LOGBUFFERMAP ret=%d size=%llu kaddr=0x%llx user=0x%llx\\n\", ret,\n"
@@ -1069,7 +1073,6 @@ patch('bsd/dev/sweet_sample.c', [
 # —— 观测：backboardd/SpringBoard 打开了哪些 IOKit 服务（最近 6 个类名）
 patch('iokit/Kernel/IOService.cpp', [
     ('bool\nIOService::open(   IOService *     forClient,\n', '#if defined(SWEET)\n/* 谁打开了哪些 IOKit 服务：只留最近 6 个类名，采样线里每拍打一遍。 */\nextern "C" void proc_selfname(char *buf, int size);\nuint32_t houji_iok_count;\nuint32_t houji_iok_ring_idx;\nchar     houji_iok_ring[6][28];\n#endif\n\nbool\nIOService::open(   IOService *     forClient,\n', 'iok ring decl'),
-    ('\tbool                        ok;\n', '\tbool                        ok;\n#if defined(SWEET)\n\t{\n\t    char houji_nm[32];\n\t    proc_selfname(houji_nm, sizeof(houji_nm));\n\t    if (strncmp(houji_nm, "backboardd", 10) == 0 ||\n\t        strncmp(houji_nm, "SpringBoard", 11) == 0) {\n\t        const char *houji_cls = getMetaClass()->getClassName();\n\t        uint32_t houji_slot = houji_iok_ring_idx++ % 6;\n\t        strlcpy(houji_iok_ring[houji_slot], houji_cls,\n\t            sizeof(houji_iok_ring[0]));\n\t        __atomic_add_fetch(&houji_iok_count, 1u, __ATOMIC_RELAXED);\n\t    }\n\t}\n#endif\n', 'iok ring record'),
 ])
 patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\textern char houji_surf_last_caller[32];\n', '\t\t\t\t\textern char houji_surf_last_caller[32];\n\t\t\t\t\textern uint32_t houji_iok_count, houji_iok_ring_idx;\n\t\t\t\t\textern char houji_iok_ring[6][28];\n', 'iok extern'),
@@ -1101,7 +1104,7 @@ say "6/6 校验产物"
 K=$(find "$W/out" -type f -size +5M \( -name 'kernel*' -o -name 'mach_kernel' -o -name '*.macho' \) 2>/dev/null | head -1)
 [ -n "$K" ] || die "找不到产物"
 echo "产物: $K"
-for s in 'newUserClient type=%u ok' 'oslog: LOGBUFFERMAP ret=%d' 'SYSTEM_PROXY missing, used SYSTEM' 'HOUJI FB DIAG: poll=%d' 'HOUJI OPEN #%llu' 'houji: persona type %u created' 'HOUJI PERSONA: calls=%u created=%u' 'HOUJI SPAWN FAIL %s err=%d' 'x16 %llu x0 0x%llx' 'Firehose forced on' 'HOUJI OSLOG: firehose stub' 'persona proxy uid501' 'HOUJI MKDIR %s' 'HOUJI HFS: dirty bit cleared' 'HOUJI DIRS: %d' 'HOUJI P%02d %s' 'HOUJI KEYS1' 'size=%llu persona' 'houji: persona %s uid=%u' 'houji_persona_bootstrap' 'HOUJI FBX'; do
+for s in 'newUserClient type=%u ok' 'oslog: LOGBUFFERMAP ret=%d' 'SYSTEM_PROXY missing, used SYSTEM' 'HOUJI FB DIAG: poll=%d' 'userclient trace' 'houji: persona type %u created' 'HOUJI PERSONA: calls=%u created=%u' 'HOUJI SPAWN FAIL %s err=%d' 'x16 %llu x0 0x%llx' 'Firehose forced on' 'HOUJI OSLOG: firehose stub' 'persona proxy uid501' 'HOUJI MKDIR %s' 'HOUJI HFS: dirty bit cleared' 'HOUJI DIRS: %d' 'HOUJI P%02d %s' 'HOUJI KEYS1' 'size=%llu persona' 'houji: persona %s uid=%u' 'houji_persona_bootstrap' 'HOUJI FBX'; do
   echo "  命中[$s] = $(LC_ALL=C grep -c "$s" "$K" || true)"
 done
 shasum -a 256 "$K"; ls -l "$K"

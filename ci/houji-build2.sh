@@ -1030,6 +1030,16 @@ sco2 = ("\tif (ret == kIOReturnSuccess) {\n"
 patch('iokit/Kernel/arm/SweetSurface.cpp',
       [(scd, scd2, 'surf counter'), (sco, sco2, 'surf inc')])
 
+# —— 观测：最近 4 次 selector 的编号与返回码，直接进 FBX 行
+patch('iokit/Kernel/arm/SweetFramebuffer.cpp', [
+    ('uint64_t houji_fb_open_count, houji_fb_sel_count;\n', 'uint64_t houji_fb_open_count, houji_fb_sel_count;\nuint64_t houji_fb_sel_hist[4];\nuint32_t houji_fb_sel_hist_idx;\n', 'sel hist decl'),
+    ('\t    args->scalarOutputCount, args->structureOutputSize, ret);\n\t}\n\treturn ret;\n}\n', '\t    args->scalarOutputCount, args->structureOutputSize, ret);\n\t}\n\t__atomic_store_n(&houji_fb_sel_hist[__atomic_load_n(&houji_fb_sel_hist_idx, __ATOMIC_RELAXED) & 3],\n\t    ((uint64_t)selector << 32) | (uint32_t)ret, __ATOMIC_RELAXED);\n\t__atomic_add_fetch(&houji_fb_sel_hist_idx, 1, __ATOMIC_RELAXED);\n\treturn ret;\n}\n', 'sel hist record'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\textern uint64_t houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count;\n', '\t\t\t\t\textern uint64_t houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count;\n\t\t\t\t\textern uint64_t houji_fb_sel_hist[4];\n', 'fbx hist extern'),
+    ('\t\t\t\t\tprintf("HOUJI FBX open=%llu sel=%llu surf=%llu swap=%llu pres=%llu\\n",\n\t\t\t\t\t    houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count, hs, hp);\n', '\t\t\t\t\tprintf("HOUJI FBX open=%llu sel=%llu surf=%llu swap=%llu pres=%llu h=%x:%x %x:%x %x:%x %x:%x\\n",\n\t\t\t\t\t    houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count, hs, hp,\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[0] >> 32), (unsigned)houji_fb_sel_hist[0],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[2] >> 32), (unsigned)houji_fb_sel_hist[2],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[3] >> 32), (unsigned)houji_fb_sel_hist[3]);\n', 'fbx hist fields'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

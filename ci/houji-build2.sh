@@ -1108,7 +1108,6 @@ patch('bsd/dev/houji_usb_debug.c', [
     ('    if (!(rd(DSTS)&HALTED)) { fail("controller halt timeout");return; }', '\thouji_usb_stage=14;\n    if (!(rd(DSTS)&HALTED)) { fail("controller halt timeout");return; }', 'usb stage 13'),
     ('    if (rd(DCTL)&RESET) { fail("controller reset timeout");return; }', '\thouji_usb_stage=15;\n    if (rd(DCTL)&RESET) { fail("controller reset timeout");return; }', 'usb stage 14'),
     ('    if (rd(GEVNTADRHI)!=(uint32_t)(u.pa>>32)) { fail("event address readback");return; }', '\thouji_usb_stage=16;\n    if (rd(GEVNTADRHI)!=(uint32_t)(u.pa>>32)) { fail("event address readback");return; }', 'usb stage 15'),
-    ('        epcmd(1,SET_CONFIG,64u<<3,(1u<<8)|(1u<<10)|(1u<<25),0) || epcmd(1,SET_RESOURCE,1,0,0)) return;', '\thouji_usb_stage=17;\n        epcmd(1,SET_CONFIG,64u<<3,(1u<<8)|(1u<<10)|(1u<<25),0) || epcmd(1,SET_RESOURCE,1,0,0)) return;', 'usb stage 16'),
     ('    wr(DALEPENA,3);setup_arm();if (u.failed) return;', '\thouji_usb_stage=18;\n    wr(DALEPENA,3);setup_arm();if (u.failed) return;', 'usb stage 17'),
     ('    if (rd(DSTS)&HALTED) { fail("controller run timeout");return; }', '\thouji_usb_stage=19;\n    if (rd(DSTS)&HALTED) { fail("controller run timeout");return; }', 'usb stage 18'),
     ('    if (kernel_thread_start(usb_thread,NULL,&thread)!=KERN_SUCCESS) { fail("poll thread creation");wr(DCTL,rd(DCTL)&~RUN);return; }', '\thouji_usb_stage=20;\n    if (kernel_thread_start(usb_thread,NULL,&thread)!=KERN_SUCCESS) { fail("poll thread creation");wr(DCTL,rd(DCTL)&~RUN);return; }', 'usb stage 19'),
@@ -1117,6 +1116,10 @@ patch('bsd/dev/houji_usb_debug.c', [
 patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\textern char houji_surf_last_caller[32];\n', '\t\t\t\t\textern char houji_surf_last_caller[32];\n\t\t\t\t\textern int houji_usb_stage;\n\t\t\t\t\textern uint32_t houji_usb_obs[8];\n', 'usb extern'),
     ('\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n', '\t\t\t\t\tprintf("HOUJI USBS st=%d g=%x/%x/%x/%x gctl=%x dsts=%x id=%x\\n", houji_usb_stage,\n\t\t\t\t\t    houji_usb_obs[0], houji_usb_obs[1], houji_usb_obs[2], houji_usb_obs[3],\n\t\t\t\t\t    houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7]);\n\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n', 'usb print'),
+])
+
+patch('bsd/dev/houji_usb_debug.c', [
+    ('    if (rd(GEVNTADRHI)!=(uint32_t)(u.pa>>32)) { fail("event address readback");return; }', '    if (rd(GEVNTADRHI)!=(uint32_t)(u.pa>>32)) { fail("event address readback");return; }\n\thouji_usb_stage=17;', 'usb stage 17'),
 ])
 
 print('PATCHES_OK')

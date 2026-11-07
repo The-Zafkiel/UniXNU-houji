@@ -46,11 +46,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/artifact"
-          K=$(find "$HOME/houji/out" -type f -size +5M \( -name 'kernel*' -o -name 'mach_kernel' -o -name '*.macho' \) 2>/dev/null | head -1)
-          if [ -z "$K" ]; then echo "no kernel produced"; ls -R "$HOME/houji/out" 2>/dev/null | head -40; exit 1; fi
+          K="$HOME/houji/out/kernel/xnu.obj/DEVELOPMENT_ARM64_SWEET/kernel.development.sweet"
+          if [ ! -f "$K" ]; then
+            K=$(find "$HOME/houji/out" -name 'kernel.development.sweet' -not -path '*dSYM*' 2>/dev/null | head -1)
+          fi
+          if [ -z "$K" ] || [ ! -f "$K" ]; then echo "no kernel produced"; ls -R "$HOME/houji/out" 2>/dev/null | head -40; exit 1; fi
           echo "kernel=$K size=$(stat -f%z "$K")"
           gzip -9 -c "$K" > "$RUNNER_TEMP/artifact/kernel.new.gz"
-          cp "$HOME/houji-build.log" "$RUNNER_TEMP/artifact/houji-build.log"
+          tail -3000 "$HOME/houji-build.log" > "$RUNNER_TEMP/artifact/houji-build.log"
           ls -l "$RUNNER_TEMP/artifact"
 
       - uses: actions/upload-artifact@v4

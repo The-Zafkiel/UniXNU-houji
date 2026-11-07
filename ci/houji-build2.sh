@@ -1087,6 +1087,38 @@ patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n', '{\n\t\t\t\t\t/* 启动期 log 回捞：命中的前 12 行一直重打，滚动也丢不掉。 */\n\t\t\t\t\textern unsigned houji_debug_copy(uint64_t *pos, char *out, unsigned max);\n\t\t\t\t\tstatic uint64_t houji_dbg_pos;\n\t\t\t\t\tstatic char houji_dbg_hits[12][80];\n\t\t\t\t\tstatic unsigned houji_dbg_hitn;\n\t\t\t\t\tchar houji_dbg_buf[1024];\n\t\t\t\t\tfor (int r = 0; r < 6; r++) {\n\t\t\t\t\t    unsigned n = houji_debug_copy(&houji_dbg_pos, houji_dbg_buf, sizeof(houji_dbg_buf) - 1);\n\t\t\t\t\t    if (n == 0) break;\n\t\t\t\t\t    houji_dbg_buf[n] = 0;\n\t\t\t\t\t    char *p = houji_dbg_buf;\n\t\t\t\t\t    while (*p && houji_dbg_hitn < 12) {\n\t\t\t\t\t        char *nl = strchr(p, 10);\n\t\t\t\t\t        if (nl == NULL) break;\n\t\t\t\t\t        *nl = 0;\n\t\t\t\t\t        if (strstr(p, "backboardd") || strstr(p, "SpringBoard") ||\n\t\t\t\t\t            strstr(p, "IOSurface") || strstr(p, "IOMobileFramebuffer") ||\n\t\t\t\t\t            strstr(p, "CARender") || strstr(p, "IOAccelerator") ||\n\t\t\t\t\t            strstr(p, "error = 138") || strstr(p, "error = 159")) {\n\t\t\t\t\t            strlcpy(houji_dbg_hits[houji_dbg_hitn++], p, 80);\n\t\t\t\t\t        }\n\t\t\t\t\t        p = nl + 1;\n\t\t\t\t\t    }\n\t\t\t\t\t}\n\t\t\t\t\tfor (unsigned i = 0; i < houji_dbg_hitn; i++) {\n\t\t\t\t\t    printf("DBG|%s\\n", houji_dbg_hits[i]);\n\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n', 'boot log scan'),
 ])
 
+# —— USB 调试通道：记录停在第几道闸 + 关键寄存器快照
+patch('bsd/dev/houji_usb_debug.c', [
+    ('void houji_usb_debug_start(void)\n{', 'int houji_usb_stage;\nuint32_t houji_usb_obs[8];\nvoid houji_usb_debug_start(void)\n{', 'usb stage decl'),
+    ('    printf("HOUJI USB: GCC power=%08x master=%08x cfg=%08x aggre=%08x\\n",power,master,cfg,aggre);', '    printf("HOUJI USB: GCC power=%08x master=%08x cfg=%08x aggre=%08x\\n",power,master,cfg,aggre);\n\thouji_usb_obs[0]=power;houji_usb_obs[1]=master;houji_usb_obs[2]=cfg;houji_usb_obs[3]=aggre;', 'usb obs gcc'),
+    ('    printf("HOUJI USB: id=%08x hwparams0=%08x awidth=%u gctl=%08x dctl=%08x dsts=%08x\\n",\n        id,hw,width,rd(GCTL),rd(DCTL),rd(DSTS));', '    printf("HOUJI USB: id=%08x hwparams0=%08x awidth=%u gctl=%08x dctl=%08x dsts=%08x\\n",\n        id,hw,width,rd(GCTL),rd(DCTL),rd(DSTS));\n\thouji_usb_obs[4]=rd(GCTL);houji_usb_obs[5]=rd(DCTL);houji_usb_obs[6]=rd(DSTS);houji_usb_obs[7]=id;', 'usb obs ctl'),
+    ('    printf("HOUJI USB: CDC ACM candidate001, RAM log and read-only commands\\n");', '    printf("HOUJI USB: CDC ACM candidate001, RAM log and read-only commands\\n");\n\thouji_usb_stage=1;', 'usb stage 0'),
+    ('        printf("HOUJI USB: houji/SM8650 ADT guard refused; no MMIO mapped\\n");return;', '\thouji_usb_stage=2;\n        printf("HOUJI USB: houji/SM8650 ADT guard refused; no MMIO mapped\\n");return;', 'usb stage 1'),
+    ('    if (!gcc) return;', '\thouji_usb_stage=3;\n    if (!gcc) return;', 'usb stage 2'),
+    ('        printf("HOUJI USB: clocks/power unavailable; controller untouched\\n");return;', '\thouji_usb_stage=4;\n        printf("HOUJI USB: clocks/power unavailable; controller untouched\\n");return;', 'usb stage 3'),
+    ('    if (!u.regs || !u.smmu) return;', '\thouji_usb_stage=5;\n    if (!u.regs || !u.smmu) return;', 'usb stage 4'),
+    ('    if ((id>>16)!=0x5533 && (id>>16)!=0x3331) return;', '\thouji_usb_stage=6;\n    if ((id>>16)!=0x5533 && (id>>16)!=0x3331) return;', 'usb stage 5'),
+    ('        printf("HOUJI USB: device mode/identity guard refused; controller untouched\\n");return;', '\thouji_usb_stage=7;\n        printf("HOUJI USB: device mode/identity guard refused; controller untouched\\n");return;', 'usb stage 6'),
+    ('    if (width<36 || width>64) { printf("HOUJI USB: DMA address width guard refused\\n");return; }', '\thouji_usb_stage=8;\n    if (width<36 || width>64) { printf("HOUJI USB: DMA address width guard refused\\n");return; }', 'usb stage 7'),
+    ('        printf("HOUJI USB: read-only preflight passed; no DMA allocation or controller writes\\n");return;', '\thouji_usb_stage=9;\n        printf("HOUJI USB: read-only preflight passed; no DMA allocation or controller writes\\n");return;', 'usb stage 8'),
+    ('    if (!pn) return;', '\thouji_usb_stage=10;\n    if (!pn) return;', 'usb stage 9'),
+    ('    if (!vusb_dma_allowed(u.pa,DMA_SIZE,width)) { printf("HOUJI USB: owned DMA width/range guard refused\\n");return; }', '\thouji_usb_stage=11;\n    if (!vusb_dma_allowed(u.pa,DMA_SIZE,width)) { printf("HOUJI USB: owned DMA width/range guard refused\\n");return; }', 'usb stage 10'),
+    ('        if (!page || ptoa_64(page)!=u.pa+off) return;', '\thouji_usb_stage=12;\n        if (!page || ptoa_64(page)!=u.pa+off) return;', 'usb stage 11'),
+    ('    if (!qs) return;', '\thouji_usb_stage=13;\n    if (!qs) return;', 'usb stage 12'),
+    ('    if (!(rd(DSTS)&HALTED)) { fail("controller halt timeout");return; }', '\thouji_usb_stage=14;\n    if (!(rd(DSTS)&HALTED)) { fail("controller halt timeout");return; }', 'usb stage 13'),
+    ('    if (rd(DCTL)&RESET) { fail("controller reset timeout");return; }', '\thouji_usb_stage=15;\n    if (rd(DCTL)&RESET) { fail("controller reset timeout");return; }', 'usb stage 14'),
+    ('    if (rd(GEVNTADRHI)!=(uint32_t)(u.pa>>32)) { fail("event address readback");return; }', '\thouji_usb_stage=16;\n    if (rd(GEVNTADRHI)!=(uint32_t)(u.pa>>32)) { fail("event address readback");return; }', 'usb stage 15'),
+    ('        epcmd(1,SET_CONFIG,64u<<3,(1u<<8)|(1u<<10)|(1u<<25),0) || epcmd(1,SET_RESOURCE,1,0,0)) return;', '\thouji_usb_stage=17;\n        epcmd(1,SET_CONFIG,64u<<3,(1u<<8)|(1u<<10)|(1u<<25),0) || epcmd(1,SET_RESOURCE,1,0,0)) return;', 'usb stage 16'),
+    ('    wr(DALEPENA,3);setup_arm();if (u.failed) return;', '\thouji_usb_stage=18;\n    wr(DALEPENA,3);setup_arm();if (u.failed) return;', 'usb stage 17'),
+    ('    if (rd(DSTS)&HALTED) { fail("controller run timeout");return; }', '\thouji_usb_stage=19;\n    if (rd(DSTS)&HALTED) { fail("controller run timeout");return; }', 'usb stage 18'),
+    ('    if (kernel_thread_start(usb_thread,NULL,&thread)!=KERN_SUCCESS) { fail("poll thread creation");wr(DCTL,rd(DCTL)&~RUN);return; }', '\thouji_usb_stage=20;\n    if (kernel_thread_start(usb_thread,NULL,&thread)!=KERN_SUCCESS) { fail("poll thread creation");wr(DCTL,rd(DCTL)&~RUN);return; }', 'usb stage 19'),
+    ('    printf("HOUJI USB: running; DMA=%llx; CDC serial HOUJIDBG001; awaiting enumeration\\n",u.pa);', '    printf("HOUJI USB: running; DMA=%llx; CDC serial HOUJIDBG001; awaiting enumeration\\n",u.pa);\n\thouji_usb_stage=21;', 'usb stage 20'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\textern char houji_surf_last_caller[32];\n', '\t\t\t\t\textern char houji_surf_last_caller[32];\n\t\t\t\t\textern int houji_usb_stage;\n\t\t\t\t\textern uint32_t houji_usb_obs[8];\n', 'usb extern'),
+    ('\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n', '\t\t\t\t\tprintf("HOUJI USBS st=%d g=%x/%x/%x/%x gctl=%x dsts=%x id=%x\\n", houji_usb_stage,\n\t\t\t\t\t    houji_usb_obs[0], houji_usb_obs[1], houji_usb_obs[2], houji_usb_obs[3],\n\t\t\t\t\t    houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7]);\n\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n', 'usb print'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

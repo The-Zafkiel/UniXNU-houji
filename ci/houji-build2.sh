@@ -1161,6 +1161,22 @@ patch('bsd/dev/houji_usb_debug.c', [
     ('    if (((rd(GCTL)>>12)&3)!=2 || !identity()) {\n\thouji_usb_stage=7;\n        printf("HOUJI USB: device mode/identity guard refused; controller untouched\\n");return;\n    }\n', '    int ident = identity();\n    if (((rd(GCTL)>>12)&3)!=2) {\n\thouji_usb_stage=7;\n        printf("HOUJI USB: controller not in device mode (gctl=%08x); untouched\\n", rd(GCTL));return;\n    }\n    if (!ident) printf("HOUJI USB: SMMU identity mismatch; proceeding anyway\\n");\n', 'identity observe'),
 ])
 
+# —— USB: CurMod 只记录、复位后强制切 device、地址宽度归一化
+patch('bsd/dev/houji_usb_debug.c', [
+    ('    int ident = identity();\n    if (((rd(GCTL)>>12)&3)!=2) {\n\thouji_usb_stage=7;\n        printf("HOUJI USB: controller not in device mode (gctl=%08x); untouched\\n", rd(GCTL));return;\n    }\n    if (!ident) printf("HOUJI USB: SMMU identity mismatch; proceeding anyway\\n");\n', '    int ident = identity();\n    houji_usb_mod = (rd(GCTL)>>12)&3;\n    if (houji_usb_mod != 2) {\n\thouji_usb_stage=7;\n        printf("HOUJI USB: gctl mod=%d (want 2); switch after reset\\n", houji_usb_mod);\n    }\n    if (!ident) printf("HOUJI USB: SMMU identity mismatch; proceeding anyway\\n");\n', 'mod observe'),
+    ('    if (width<36 || width>64) { printf("HOUJI USB: DMA address width guard refused\\n");return; }', '    if (width<32 || width>64) width=48;   /* 该字段在 SM8650 上不一定代表地址宽度 */', 'width normalize'),
+    ('    if (rd(DCTL)&RESET) { fail("controller reset timeout");return; }\n', '    if (rd(DCTL)&RESET) { fail("controller reset timeout");return; }\n    wr(GCTL,(rd(GCTL)&~(3u<<12))|(2u<<12));\n    delay(10);\n    houji_usb_mod=(rd(GCTL)>>12)&3;\n    if (houji_usb_mod!=2) { fail("device mode switch");return; }\n', 'force device mode'),
+])
+patch('bsd/dev/houji_usb_debug.c', [
+    ('int houji_usb_stage;', 'int houji_usb_stage;\nint houji_usb_mod;', 'mod global'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\textern char houji_usb_board[80];', '\t\t\t\t\textern char houji_usb_board[80];\n\t\t\t\t\textern int houji_usb_mod;', 'mod extern'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\tprintf("HOUJI USBS st=%d dtf=%d sc=%u dn=%u prod=%d gctl=%x dsts=%x id=%x bd=%s\\n",\n\t\t\t\t\t    houji_usb_stage, houji_dt_fail, houji_dt_scale, houji_dt_density, houji_dt_product,\n\t\t\t\t\t    houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7], houji_usb_board);', '\t\t\t\t\tprintf("HOUJI USBS st=%d md=%d dtf=%d sc=%u dn=%u prod=%d gctl=%x dsts=%x id=%x bd=%s\\n",\n\t\t\t\t\t    houji_usb_stage, houji_usb_mod, houji_dt_fail, houji_dt_scale, houji_dt_density, houji_dt_product,\n\t\t\t\t\t    houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7], houji_usb_board);', 'mod print'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

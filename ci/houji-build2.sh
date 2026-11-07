@@ -1040,6 +1040,18 @@ patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\tprintf("HOUJI FBX open=%llu sel=%llu surf=%llu swap=%llu pres=%llu\\n",\n\t\t\t\t\t    houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count, hs, hp);\n', '\t\t\t\t\tprintf("HOUJI FBX open=%llu sel=%llu surf=%llu swap=%llu pres=%llu h=%x:%x %x:%x %x:%x %x:%x\\n",\n\t\t\t\t\t    houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count, hs, hp,\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[0] >> 32), (unsigned)houji_fb_sel_hist[0],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[2] >> 32), (unsigned)houji_fb_sel_hist[2],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[3] >> 32), (unsigned)houji_fb_sel_hist[3]);\n', 'fbx hist fields'),
 ])
 
+# —— 观测：externalMethod 的在飞数量 + 最近一次入口 selector
+#    sel>0 而 hist 全 0 说明调用进了我们的函数就没再返回，infl 会确认这一点。
+patch('iokit/Kernel/arm/SweetFramebuffer.cpp', [
+    ('uint32_t houji_fb_sel_hist_idx;\n', 'uint32_t houji_fb_sel_hist_idx;\nuint64_t houji_fb_inflight, houji_fb_last_ret;\nuint32_t houji_fb_last_sel;\n', 'inflight decl'),
+    ('\t__atomic_add_fetch(&houji_fb_sel_count, 1ull, __ATOMIC_RELAXED);\n', '\t__atomic_add_fetch(&houji_fb_sel_count, 1ull, __ATOMIC_RELAXED);\n\t__atomic_store_n(&houji_fb_last_sel, selector, __ATOMIC_RELAXED);\n\t__atomic_add_fetch(&houji_fb_inflight, 1ull, __ATOMIC_RELAXED);\n', 'inflight enter'),
+    ('\t__atomic_add_fetch(&houji_fb_sel_hist_idx, 1, __ATOMIC_RELAXED);\n\treturn ret;\n}\n', '\t__atomic_add_fetch(&houji_fb_sel_hist_idx, 1, __ATOMIC_RELAXED);\n\t__atomic_store_n(&houji_fb_last_ret, (uint64_t)(uint32_t)ret, __ATOMIC_RELAXED);\n\t__atomic_sub_fetch(&houji_fb_inflight, 1ull, __ATOMIC_RELAXED);\n\treturn ret;\n}\n', 'inflight exit'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\textern uint64_t houji_fb_sel_hist[4];\n', '\t\t\t\t\textern uint64_t houji_fb_sel_hist[4];\n\t\t\t\t\textern uint64_t houji_fb_inflight, houji_fb_last_ret;\n\t\t\t\t\textern uint32_t houji_fb_last_sel;\n', 'fbx infl extern'),
+    ('\t\t\t\t\tprintf("HOUJI FBX open=%llu sel=%llu surf=%llu swap=%llu pres=%llu h=%x:%x %x:%x %x:%x %x:%x\\n",\n\t\t\t\t\t    houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count, hs, hp,\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[0] >> 32), (unsigned)houji_fb_sel_hist[0],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[2] >> 32), (unsigned)houji_fb_sel_hist[2],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[3] >> 32), (unsigned)houji_fb_sel_hist[3]);\n', '\t\t\t\t\tprintf("HOUJI FBX open=%llu sel=%llu surf=%llu swap=%llu pres=%llu infl=%llu last=%u:%x h=%x:%x %x:%x\\n",\n\t\t\t\t\t    houji_fb_open_count, houji_fb_sel_count,\n\t\t\t\t\t    houji_surf_create_count, hs, hp,\n\t\t\t\t\t    houji_fb_inflight, houji_fb_last_sel, (unsigned)houji_fb_last_ret,\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[0] >> 32), (unsigned)houji_fb_sel_hist[0],\n\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1]);\n', 'fbx infl fields'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

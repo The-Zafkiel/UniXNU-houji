@@ -1122,6 +1122,22 @@ patch('bsd/dev/houji_usb_debug.c', [
     ('    if (rd(GEVNTADRHI)!=(uint32_t)(u.pa>>32)) { fail("event address readback");return; }', '    if (rd(GEVNTADRHI)!=(uint32_t)(u.pa>>32)) { fail("event address readback");return; }\n\thouji_usb_stage=17;', 'usb stage 17'),
 ])
 
+# —— USB: ADT 标识 + 可越过该闸；DBG: 16 条 + 崩溃关键字 + 优先 path
+patch('bsd/dev/houji_usb_debug.c', [
+    ('uint32_t houji_usb_obs[8];', 'uint32_t houji_usb_obs[8];\nchar houji_usb_board[80];', 'usb board decl'),
+    ('    attempted=true;u.mps=512;u.coding[0]=0;u.coding[1]=0xc2;u.coding[2]=1;u.coding[6]=8;', '    attempted=true;u.mps=512;u.coding[0]=0;u.coding[1]=0xc2;u.coding[2]=1;u.coding[6]=8;\n    int board_forced = 0;PE_parse_boot_argn("houji_usb_force", &board_forced, sizeof(board_forced));', 'usb board forced arg'),
+    ('        !huc_board(compatible,compatible_n,target,target_n)) {', '        (!huc_board(compatible,compatible_n,target,target_n) && board_forced == 0)) {', 'usb board force'),
+    ('        printf("HOUJI USB: houji/SM8650 ADT guard refused; no MMIO mapped\\n");return;', '        {\n            unsigned cn = compatible_n > 55 ? 55 : compatible_n;\n            unsigned tn = target_n > 15 ? 15 : target_n;\n            const char *c = (const char *)compatible;\n            const char *t = (const char *)target;\n            unsigned o = 0;\n            for (unsigned i = 0; i < cn && c; i++) {\n                char ch = c[i];\n                houji_usb_board[o++] = (ch >= 32 && ch < 127) ? ch : 46;\n            }\n            houji_usb_board[o++] = 124;\n            for (unsigned i = 0; i < tn && t && o < 78; i++) {\n                char ch = t[i];\n                houji_usb_board[o++] = (ch >= 32 && ch < 127) ? ch : 46;\n            }\n            houji_usb_board[o] = 0;\n        }\n        printf("HOUJI USB: houji/SM8650 ADT guard refused; no MMIO mapped\\n");return;', 'usb board capture'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\textern uint32_t houji_usb_obs[8];', '\t\t\t\t\textern uint32_t houji_usb_obs[8];\n\t\t\t\t\textern char houji_usb_board[80];', 'usb board extern'),
+    ('\t\t\t\t\tprintf("HOUJI USBS st=%d g=%x/%x/%x/%x gctl=%x dsts=%x id=%x\\n", houji_usb_stage,\n\t\t\t\t\t    houji_usb_obs[0], houji_usb_obs[1], houji_usb_obs[2], houji_usb_obs[3],\n\t\t\t\t\t    houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7]);', '\t\t\t\t\tprintf("HOUJI USBS st=%d g=%x/%x/%x/%x gctl=%x dsts=%x id=%x bd=%s\\n", houji_usb_stage,\n\t\t\t\t\t    houji_usb_obs[0], houji_usb_obs[1], houji_usb_obs[2], houji_usb_obs[3],\n\t\t\t\t\t    houji_usb_obs[4], houji_usb_obs[6], houji_usb_obs[7], houji_usb_board);', 'usb board print'),
+    ('\t\t\t\t\tstatic char houji_dbg_hits[12][80];', '\t\t\t\t\tstatic char houji_dbg_hits[16][80];', 'dbg hits 16'),
+    ('\t\t\t\t\t    while (*p && houji_dbg_hitn < 12) {', '\t\t\t\t\t    while (*p && houji_dbg_hitn < 16) {', 'dbg limit 16'),
+    ('\t\t\t\t\t            strnstr(p, "error = 138", strlen(p)) || strnstr(p, "error = 159", strlen(p))) {', '\t\t\t\t\t            strnstr(p, "error = 138", strlen(p)) || strnstr(p, "error = 159", strlen(p)) ||\n\t\t\t\t\t            strnstr(p, "Library not loaded", strlen(p)) || strnstr(p, "image not found", strlen(p)) ||\n\t\t\t\t\t            strnstr(p, "Symbol not found", strlen(p)) || strnstr(p, "abort", strlen(p)) ||\n\t\t\t\t\t            strnstr(p, "Exception", strlen(p)) || strnstr(p, "failed", strlen(p))) {', 'dbg keywords'),
+    ('\t\t\t\t\t            strlcpy(houji_dbg_hits[houji_dbg_hitn++], p, 80);', '\t\t\t\t\t            char *keep = strnstr(p, "path = ", strlen(p));\n\t\t\t\t\t            strlcpy(houji_dbg_hits[houji_dbg_hitn++], keep ? keep : p, 80);', 'dbg path'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

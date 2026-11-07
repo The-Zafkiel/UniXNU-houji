@@ -1152,6 +1152,15 @@ patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\tstatic char houji_dbg_hits[16][80];', '\t\t\t\t\tstatic char houji_dbg_hits[16][80];\n\t\t\t\t\tstatic char houji_dbg_tail[80];', 'dbg tail buf'),
 ])
 
+# —— USB：ADT/SMMU 两道猜测性硬门改为只记录，让控制器真正启动
+patch('bsd/dev/houji_usb_debug.c', [
+    ('    if (!dt_ok && board_forced == 0) {\n\thouji_usb_stage=2;\n', '    if (!dt_ok) {\n', 'gate step1'),
+    ('        printf("HOUJI USB: houji/SM8650 ADT guard refused; no MMIO mapped\\n");return;\n', '        printf("HOUJI USB: ADT strings not matched (dtf=%d); proceeding anyway\\n", houji_dt_fail);\n', 'gate step2'),
+    ('    int board_forced = 0;PE_parse_boot_argn("houji_usb_force", &board_forced, sizeof(board_forced));\n', '', 'drop board_forced'),
+    ('    if (dt_ok) { dt_ok = huc_board(compatible,compatible_n,target,target_n); if (!dt_ok) houji_dt_fail=4; }\n', '    if (dt_ok) { dt_ok = huc_board(compatible,compatible_n,target,target_n); if (!dt_ok) houji_dt_fail=4; }\n    if (!dt_ok && !houji_dt_fail) houji_dt_fail = 5;\n', 'dtf 5'),
+    ('    if (((rd(GCTL)>>12)&3)!=2 || !identity()) {\n\thouji_usb_stage=7;\n        printf("HOUJI USB: device mode/identity guard refused; controller untouched\\n");return;\n    }\n', '    int ident = identity();\n    if (((rd(GCTL)>>12)&3)!=2) {\n\thouji_usb_stage=7;\n        printf("HOUJI USB: controller not in device mode (gctl=%08x); untouched\\n", rd(GCTL));return;\n    }\n    if (!ident) printf("HOUJI USB: SMMU identity mismatch; proceeding anyway\\n");\n', 'identity observe'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

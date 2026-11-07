@@ -1066,6 +1066,16 @@ patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1]);\n', '\t\t\t\t\t    (unsigned)(houji_fb_sel_hist[1] >> 32), (unsigned)houji_fb_sel_hist[1]);\n\t\t\t\t\tprintf("HOUJI SFX fbwho=%s sfcall=%llu sflast=%u sfwho=%s\\n",\n\t\t\t\t\t    houji_fb_last_caller, houji_surf_sel_count,\n\t\t\t\t\t    houji_surf_last_sel, houji_surf_last_caller);\n', 'sfx print'),
 ])
 
+# —— 观测：backboardd/SpringBoard 打开了哪些 IOKit 服务（最近 6 个类名）
+patch('iokit/Kernel/IOService.cpp', [
+    ('bool\nIOService::open(   IOService *     forClient,\n', '#if defined(SWEET)\n/* 谁打开了哪些 IOKit 服务：只留最近 6 个类名，采样线里每拍打一遍。 */\nuint32_t houji_iok_count;\nuint32_t houji_iok_ring_idx;\nchar     houji_iok_ring[6][28];\n#endif\n\nbool\nIOService::open(   IOService *     forClient,\n', 'iok ring decl'),
+    ('\tbool                        ok;\n', '\tbool                        ok;\n#if defined(SWEET)\n\t{\n\t    extern void proc_selfname(char *buf, int size);\n\t    char houji_nm[32];\n\t    proc_selfname(houji_nm, sizeof(houji_nm));\n\t    if (strncmp(houji_nm, "backboardd", 10) == 0 ||\n\t        strncmp(houji_nm, "SpringBoard", 11) == 0) {\n\t        const char *houji_cls = getMetaClass()->getClassName();\n\t        uint32_t houji_slot = houji_iok_ring_idx++ % 6;\n\t        strlcpy(houji_iok_ring[houji_slot], houji_cls,\n\t            sizeof(houji_iok_ring[0]));\n\t        __atomic_add_fetch(&houji_iok_count, 1u, __ATOMIC_RELAXED);\n\t    }\n\t}\n#endif\n', 'iok ring record'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\textern char houji_surf_last_caller[32];\n', '\t\t\t\t\textern char houji_surf_last_caller[32];\n\t\t\t\t\textern uint32_t houji_iok_count, houji_iok_ring_idx;\n\t\t\t\t\textern char houji_iok_ring[6][28];\n', 'iok extern'),
+    ('\t\t\t\t\tprintf("HOUJI SFX fbwho=%s sfcall=%llu sflast=%u sfwho=%s\\n",\n\t\t\t\t\t    houji_fb_last_caller, houji_surf_sel_count,\n\t\t\t\t\t    houji_surf_last_sel, houji_surf_last_caller);\n', '\t\t\t\t\tprintf("HOUJI SFX fbwho=%s sfcall=%llu sflast=%u sfwho=%s\\n",\n\t\t\t\t\t    houji_fb_last_caller, houji_surf_sel_count,\n\t\t\t\t\t    houji_surf_last_sel, houji_surf_last_caller);\n\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n\t\t\t\t\t    houji_iok_ring[0], houji_iok_ring[1], houji_iok_ring[2],\n\t\t\t\t\t    houji_iok_ring[3], houji_iok_ring[4], houji_iok_ring[5]);\n', 'iok print'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

@@ -1079,6 +1079,14 @@ patch('bsd/dev/sweet_sample.c', [
     ('\t\t\t\t\tprintf("HOUJI SFX fbwho=%s sfcall=%llu sflast=%u sfwho=%s\\n",\n\t\t\t\t\t    houji_fb_last_caller, houji_surf_sel_count,\n\t\t\t\t\t    houji_surf_last_sel, houji_surf_last_caller);\n', '\t\t\t\t\tprintf("HOUJI SFX fbwho=%s sfcall=%llu sflast=%u sfwho=%s\\n",\n\t\t\t\t\t    houji_fb_last_caller, houji_surf_sel_count,\n\t\t\t\t\t    houji_surf_last_sel, houji_surf_last_caller);\n\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n\t\t\t\t\t    houji_iok_ring[0], houji_iok_ring[1], houji_iok_ring[2],\n\t\t\t\t\t    houji_iok_ring[3], houji_iok_ring[4], houji_iok_ring[5]);\n', 'iok print'),
 ])
 
+# —— 启动期日志回捞：console_write 也进环形缓冲，采样时打出命中的前 12 行
+patch('osfmk/console/serial_console.c', [
+    ('\tif (houji_console_muted && !panic_active()) {\n\t\treturn;\n\t}\n#endif\n\tassert(str != NULL);', '\tif (houji_console_muted && !panic_active()) {\n\t\treturn;\n\t}\n#endif\n\t{\n\t    extern void houji_debug_append(const char *, int);\n\t    houji_debug_append(str, size);\n\t}\n\tassert(str != NULL);', 'console_write ring'),
+])
+patch('bsd/dev/sweet_sample.c', [
+    ('\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n', '{\n\t\t\t\t\t/* 启动期 log 回捞：命中的前 12 行一直重打，滚动也丢不掉。 */\n\t\t\t\t\textern unsigned houji_debug_copy(uint64_t *pos, char *out, unsigned max);\n\t\t\t\t\tstatic uint64_t houji_dbg_pos;\n\t\t\t\t\tstatic char houji_dbg_hits[12][80];\n\t\t\t\t\tstatic unsigned houji_dbg_hitn;\n\t\t\t\t\tchar houji_dbg_buf[1024];\n\t\t\t\t\tfor (int r = 0; r < 6; r++) {\n\t\t\t\t\t    unsigned n = houji_debug_copy(&houji_dbg_pos, houji_dbg_buf, sizeof(houji_dbg_buf) - 1);\n\t\t\t\t\t    if (n == 0) break;\n\t\t\t\t\t    houji_dbg_buf[n] = 0;\n\t\t\t\t\t    char *p = houji_dbg_buf;\n\t\t\t\t\t    while (*p && houji_dbg_hitn < 12) {\n\t\t\t\t\t        char *nl = strchr(p, 10);\n\t\t\t\t\t        if (nl == NULL) break;\n\t\t\t\t\t        *nl = 0;\n\t\t\t\t\t        if (strstr(p, "backboardd") || strstr(p, "SpringBoard") ||\n\t\t\t\t\t            strstr(p, "IOSurface") || strstr(p, "IOMobileFramebuffer") ||\n\t\t\t\t\t            strstr(p, "CARender") || strstr(p, "IOAccelerator") ||\n\t\t\t\t\t            strstr(p, "error = 138") || strstr(p, "error = 159")) {\n\t\t\t\t\t            strlcpy(houji_dbg_hits[houji_dbg_hitn++], p, 80);\n\t\t\t\t\t        }\n\t\t\t\t\t        p = nl + 1;\n\t\t\t\t\t    }\n\t\t\t\t\t}\n\t\t\t\t\tfor (unsigned i = 0; i < houji_dbg_hitn; i++) {\n\t\t\t\t\t    printf("DBG|%s\\n", houji_dbg_hits[i]);\n\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t\tprintf("HOUJI IOK n=%u r=%s,%s,%s,%s,%s,%s\\n", houji_iok_count,\n', 'boot log scan'),
+])
+
 print('PATCHES_OK')
 PY
 [ $? -eq 0 ] || die "补丁失败"

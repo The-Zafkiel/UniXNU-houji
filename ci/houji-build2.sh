@@ -349,7 +349,7 @@ _cfg_block = r'''
          * 40 拍先打一张快照，90 拍再打一张并定格；两张都能从回放里读回来。 */
         static int diagPolls;
         int diagPoll = ++diagPolls;
-        if ((diagPoll == 40 || diagPoll == 90) &&
+        static int echoMode = -1;\n                        \n        if (echoMode < 0) { int lv = 0; PE_parse_boot_argn("houji_logecho", &lv, sizeof(lv)); echoMode = lv ? 1 : 0; }\n                        \n        const int diagAt = echoMode ? 8 : 90;\n                        \n        if ((diagPoll == (echoMode ? 4 : 40) || diagPoll == diagAt) &&
             __atomic_load_n(&houji_fb_present_count, __ATOMIC_RELAXED) == 0) {
                 IOLog("HOUJI FB DIAG: poll=%d try=%llu alloc=%llu init=%llu attach=%llu start=%llu ok=%llu stage=%llu swaps=%llu presents=%llu\n",
                     diagPoll,
@@ -362,7 +362,7 @@ _cfg_block = r'''
                     (unsigned long long)__atomic_load_n(&houji_fb_start_stage,__ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&sweet_fb_swap_count,__ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&houji_fb_present_count,__ATOMIC_RELAXED));
-                if (diagPoll >= 90) {
+                if (diagPoll >= diagAt) {
                         houji_fb_dump_log();
                         /* 用户态 /dev/console 走 console_write() 的环形缓冲，不经
                          * _cnputs，静音点必须同时盖住两处才能真的停住屏。 */

@@ -349,6 +349,8 @@ _cfg_block = r'''
          * 40 拍先打一张快照，90 拍再打一张并定格；两张都能从回放里读回来。 */
         static int diagPolls;
         int diagPoll = ++diagPolls;
+        extern uint64_t houji_fb_sel_count, houji_fb_sel_hist[4];
+        extern char houji_fb_last_caller[32];
         static int echoMode = -1;
         if (echoMode < 0) { int lv = 0; PE_parse_boot_argn("houji_logecho", &lv, sizeof(lv)); echoMode = lv ? 1 : 0; }
         const int diagAt = echoMode ? 8 : 90;

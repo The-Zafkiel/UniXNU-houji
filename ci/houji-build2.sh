@@ -349,7 +349,10 @@ _cfg_block = r'''
          * 40 拍先打一张快照，90 拍再打一张并定格；两张都能从回放里读回来。 */
         static int diagPolls;
         int diagPoll = ++diagPolls;
-        static int echoMode = -1;\n                        \n        if (echoMode < 0) { int lv = 0; PE_parse_boot_argn("houji_logecho", &lv, sizeof(lv)); echoMode = lv ? 1 : 0; }\n                        \n        const int diagAt = echoMode ? 8 : 90;\n                        \n        if ((diagPoll == (echoMode ? 4 : 40) || diagPoll == diagAt) &&
+        static int echoMode = -1;
+        if (echoMode < 0) { int lv = 0; PE_parse_boot_argn("houji_logecho", &lv, sizeof(lv)); echoMode = lv ? 1 : 0; }
+        const int diagAt = echoMode ? 8 : 90;
+        if ((diagPoll == (echoMode ? 4 : 40) || diagPoll == diagAt) &&
             __atomic_load_n(&houji_fb_present_count, __ATOMIC_RELAXED) == 0) {
                 IOLog("HOUJI FB DIAG: poll=%d try=%llu alloc=%llu init=%llu attach=%llu start=%llu ok=%llu stage=%llu swaps=%llu presents=%llu sels=%llu hist=%llx/%llx/%llx/%llx caller=%s\n",
                     diagPoll,
@@ -361,7 +364,13 @@ _cfg_block = r'''
                     (unsigned long long)__atomic_load_n(&houji_fb_uc_ok,__ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&houji_fb_start_stage,__ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&sweet_fb_swap_count,__ATOMIC_RELAXED),
-                    (unsigned long long)__atomic_load_n(&houji_fb_present_count,__ATOMIC_RELAXED),\n                    (unsigned long long)__atomic_load_n(&houji_fb_sel_count,__ATOMIC_RELAXED),\n                    (unsigned long long)__atomic_load_n(&houji_fb_sel_hist[0],__ATOMIC_RELAXED),\n                    (unsigned long long)__atomic_load_n(&houji_fb_sel_hist[1],__ATOMIC_RELAXED),\n                    (unsigned long long)__atomic_load_n(&houji_fb_sel_hist[2],__ATOMIC_RELAXED),\n                    (unsigned long long)__atomic_load_n(&houji_fb_sel_hist[3],__ATOMIC_RELAXED),\n                    houji_fb_last_caller);
+                    (unsigned long long)__atomic_load_n(&houji_fb_present_count,__ATOMIC_RELAXED),
+                    (unsigned long long)__atomic_load_n(&houji_fb_sel_count,__ATOMIC_RELAXED),
+                    (unsigned long long)__atomic_load_n(&houji_fb_sel_hist[0],__ATOMIC_RELAXED),
+                    (unsigned long long)__atomic_load_n(&houji_fb_sel_hist[1],__ATOMIC_RELAXED),
+                    (unsigned long long)__atomic_load_n(&houji_fb_sel_hist[2],__ATOMIC_RELAXED),
+                    (unsigned long long)__atomic_load_n(&houji_fb_sel_hist[3],__ATOMIC_RELAXED),
+                    houji_fb_last_caller);
                 if (diagPoll >= diagAt) {
                         houji_fb_dump_log();
                         /* 用户态 /dev/console 走 console_write() 的环形缓冲，不经
